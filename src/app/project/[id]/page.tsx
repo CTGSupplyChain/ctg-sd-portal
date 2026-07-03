@@ -52,6 +52,8 @@ export default function ProjectPage() {
   const [bomFgParts, setBomFgParts] = useState<any[]>([])
   const [bomLinesAll, setBomLinesAll] = useState<any[]>([])
   const [bomComponents, setBomComponents] = useState<ComponentMaster[]>([])
+  const [bomComponentCommits, setBomComponentCommits] = useState<Record<string, Record<string, number>>>({})
+  const [bomComponentUncommits, setBomComponentUncommits] = useState<Record<string, Record<string, number>>>({})
 
   useEffect(() => {
     sessionStorage.setItem('ctg_last_brand', brand)
@@ -237,9 +239,30 @@ export default function ProjectPage() {
         }
       })
 
+      // Real component PO supply (Supply Commit/Uncommit) — mirrors the FG
+      // sku supplyCommits/supplyUncommits pattern above, keyed by part_number.
+      const { data: componentSupplyData } = compPns.length > 0
+        ? await supabase.from('purchase_orders')
+            .select('part_number, qty, receipt_wk, commit_status')
+            .in('part_number', compPns).eq('status', 'Open')
+        : { data: [] }
+
+      const wkLabelSet = new Set(wkList.map((w: any) => w.label))
+      const componentCommits: Record<string, Record<string, number>> = {}
+      const componentUncommits: Record<string, Record<string, number>> = {}
+      ;(componentSupplyData || []).forEach((s: any) => {
+        if (!s.part_number) return
+        const wk = (s.receipt_wk && wkLabelSet.has(s.receipt_wk)) ? s.receipt_wk : CURRENT_WK
+        const target = s.commit_status === 'Commit' ? componentCommits : componentUncommits
+        if (!target[s.part_number]) target[s.part_number] = {}
+        target[s.part_number][wk] = (target[s.part_number][wk] || 0) + (s.qty || 0)
+      })
+
       setBomFgParts(fgParts || [])
       setBomLinesAll(bomLines)
       setBomComponents(components)
+      setBomComponentCommits(componentCommits)
+      setBomComponentUncommits(componentUncommits)
     }
 
     setLoading(false)
@@ -274,9 +297,11 @@ export default function ProjectPage() {
       fgWeeklyDemand: fgDemandMap,
       weeks,
       currentWkLabel: CURRENT_WK,
+      componentSupplyCommits: bomComponentCommits,
+      componentSupplyUncommits: bomComponentUncommits,
     })
     setMrpResults(mrp)
-  }, [selectedSku, bomFgParts, bomLinesAll, bomComponents, weeks, skuResults])
+  }, [selectedSku, bomFgParts, bomLinesAll, bomComponents, bomComponentCommits, bomComponentUncommits, weeks, skuResults])
 
   const currentSkuResult = skuResults.find(s => s.sku.sku === selectedSku) || skuResults[0]
   const flag = currentSkuResult ? FLAG_DISPLAY[currentSkuResult.flag] : null
