@@ -39,13 +39,15 @@ function fmtBalance(n: number): string {
 }
 
 // Row styles matching SDTable
-type MrpRowType = 'gross' | 'net' | 'po' | 'balance'
+type MrpRowType = 'gross' | 'net' | 'po' | 'uncommit' | 'commit' | 'balance'
 
 const ROW_META: Record<MrpRowType, { bg: string; labelColor: string; cellColor: string }> = {
-  gross:   { bg: 'bg-[#DCEAE8]', labelColor: 'text-[#4B5563]', cellColor: 'text-[#1F2937]' },
-  net:     { bg: 'bg-[#F4F2EE]', labelColor: 'text-[#4B5563]', cellColor: 'text-[#1F2937]' },
-  po:      { bg: 'bg-[#E4DDD3]', labelColor: 'text-[#4B5563]', cellColor: 'text-[#1F2937] font-medium' },
-  balance: { bg: 'bg-[#1F2937]', labelColor: 'text-[#E4DDD3]', cellColor: 'text-white font-semibold' },
+  gross:    { bg: 'bg-[#DCEAE8]', labelColor: 'text-[#4B5563]', cellColor: 'text-[#1F2937]' },
+  net:      { bg: 'bg-[#F4F2EE]', labelColor: 'text-[#4B5563]', cellColor: 'text-[#1F2937]' },
+  po:       { bg: 'bg-[#E4DDD3]', labelColor: 'text-[#4B5563]', cellColor: 'text-[#1F2937] font-medium' },
+  uncommit: { bg: 'bg-[#FEF3E2]', labelColor: 'text-[#4B5563]', cellColor: 'text-[#E8A33D]' },
+  commit:   { bg: 'bg-[#EFF6FF]', labelColor: 'text-[#4B5563]', cellColor: 'text-[#0E5C56] font-medium' },
+  balance:  { bg: 'bg-[#1F2937]', labelColor: 'text-[#E4DDD3]', cellColor: 'text-white font-semibold' },
 }
 
 export default function ComponentSD({ results, weeks, currentWk, fgSku, fgDescription }: ComponentSDProps) {
@@ -134,6 +136,7 @@ export default function ComponentSD({ results, weeks, currentWk, fgSku, fgDescri
           <span><strong>Gross Req</strong> = FG demand × qty/FG</span>
           <span><strong>Net Req</strong> = Gross − on-hand (rolling)</span>
           <span><strong>Planned PO</strong> = Net req rounded to MOQ</span>
+          <span><strong>Supply (Commit)</strong> = component POs confirmed</span>
           <span className="ml-auto"><strong>Balance</strong> = on-hand − demand + supply (commit)</span>
         </div>
       )}
@@ -250,6 +253,22 @@ function ComponentTable({
                 rowType="po"
                 values={result.weeks.map(w => w.plannedOrderQty)}
                 flags={result.weeks.map(w => w.poReleaseFlag)}
+                weeks={weeks}
+                currentWk={currentWk}
+              />
+              {/* Supply (Uncommit) — component POs placed but no delivery date yet */}
+              <MrpRow
+                label="Supply (Uncommit)"
+                rowType="uncommit"
+                values={result.weeks.map(w => w.supplyUncommit)}
+                weeks={weeks}
+                currentWk={currentWk}
+              />
+              {/* Supply (Commit) — component POs confirmed for this receipt week */}
+              <MrpRow
+                label="Supply (Commit)"
+                rowType="commit"
+                values={result.weeks.map(w => w.supplyCommit)}
                 weeks={weeks}
                 currentWk={currentWk}
               />
