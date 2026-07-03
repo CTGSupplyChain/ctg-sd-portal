@@ -314,6 +314,25 @@ export default function PlannedPoPage() {
           }
         })
 
+        // Real component PO supply (Supply Commit/Uncommit) — same convention
+        // as the project page, keyed by part_number then receipt week.
+        const { data: componentSupplyData } = compPns.length > 0
+          ? await supabase.from('purchase_orders')
+              .select('part_number, qty, receipt_wk, commit_status')
+              .in('part_number', compPns).eq('status', 'Open')
+          : { data: [] as any[] }
+
+        const wkLabelSet = new Set(wkList.map(w => w.label))
+        const componentCommits: Record<string, Record<string, number>> = {}
+        const componentUncommits: Record<string, Record<string, number>> = {}
+        ;(componentSupplyData || []).forEach((s: any) => {
+          if (!s.part_number) return
+          const wk = (s.receipt_wk && wkLabelSet.has(s.receipt_wk)) ? s.receipt_wk : CURRENT_WK
+          const target = s.commit_status === 'Commit' ? componentCommits : componentUncommits
+          if (!target[s.part_number]) target[s.part_number] = {}
+          target[s.part_number][wk] = (target[s.part_number][wk] || 0) + (s.qty || 0)
+        })
+
         // Aggregate across FG parts — a shared component (e.g. common cap/bottle)
         // used by multiple FGs is netted per-FG (each MRP run starts from full
         // on-hand), so totals here are additive across FGs, not cross-netted.
@@ -342,6 +361,8 @@ export default function PlannedPoPage() {
             fgWeeklyDemand: fgDemandMap,
             weeks: wkList,
             currentWkLabel: CURRENT_WK,
+            componentSupplyCommits: componentCommits,
+            componentSupplyUncommits: componentUncommits,
           })
 
           const brand = brandByProjectId.get(fgPart.project_id) || ''
