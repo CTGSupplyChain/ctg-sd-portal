@@ -4,6 +4,8 @@ import { createClient } from '@/lib/supabase'
 import Sidebar from '@/components/layout/Sidebar'
 import { computeSD, FLAG_DISPLAY } from '@/lib/sd-compute'
 import type { SkuSdResult, WeekInfo } from '@/lib/sd-compute'
+import { computeMRP } from '@/lib/bom-mrp'
+import type { ComponentMaster, BomLine } from '@/lib/bom-mrp'
 import { loadDemandForecast } from '@/lib/forecasting/forecast-lookup'
 import { Download, RefreshCw, AlertTriangle, Clock } from 'lucide-react'
 
@@ -24,19 +26,36 @@ let CURRENT_WK = ''
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
-interface PlannedPoRow {
+// Unified row shape — both FG-level (SKU) and component-level (RM/PK/SA/WIP)
+// planned orders render in the same table so procurement has one queue to work.
+type Bucket = 'RELEASE_PO' | 'PLAN_PO'
+type Level = 'FG' | 'RM' | 'PK' | 'SA' | 'WIP'
+
+interface UnifiedPlannedRow {
+  level: Level
   brand: string
-  sku: string
+  code: string              // SKU or component part number
   description: string
   uom: string
-  leadTimeWk: number
-  woc: number
-  stockoutWk: string
-  releaseByWk: string
-  releaseDateLabel: string   // human-readable monday date string
+  leadTimeWk: number | null
+  onHandQty: number | null
+  woc: number | null        // FG only
+  stockoutWk: string | null // FG only
+  releaseByWk: string       // '—' if unknown
+  releaseDateLabel: string  // '—' if unknown
   orderQty: number
-  flag: 'RELEASE_PO' | 'PLAN_PO'
+  bucket: Bucket
+  badgeLabel: string        // e.g. STOCKOUT / RELEASE PO / PLAN PO / OVERDUE / URGENT / PLAN / SET LT
+  badgeColor: string
   note: string
+}
+
+const LEVEL_COLORS: Record<Level, { bg: string; text: string }> = {
+  FG:  { bg: '#DCEAE8', text: '#0E5C56' },
+  PK:  { bg: '#E0ECFC', text: '#1849A9' },
+  SA:  { bg: '#EFE5FB', text: '#6B3FA0' },
+  RM:  { bg: '#FCEBD9', text: '#B75E13' },
+  WIP: { bg: '#FDF3C7', text: '#8A6D1D' },
 }
 
 // ── component ─────────────────────────────────────────────────────────────────
@@ -46,9 +65,10 @@ export default function PlannedPoPage() {
 
   const [profile, setProfile] = useState<any>(null)
   const [brands, setBrands] = useState<string[]>([])
-  const [rows, setRows] = useState<PlannedPoRow[]>([])
+  const [rows, setRows] = useState<UnifiedPlannedRow[]>([])
   const [loading, setLoading] = useState(true)
   const [filterFlag, setFilterFlag] = useState<'ALL' | 'RELEASE_PO' | 'PLAN_PO'>('ALL')
+  const [filterLevel, setFilterLevel] = useState<'ALL' | 'FG' | 'COMPONENT'>('ALL')
   const [snapshotDate, setSnapshotDate] = useState('')
 
   useEffect(() => { loadAll() }, [])
@@ -156,8 +176,11 @@ export default function PlannedPoPage() {
     // ── 6. Load statistical demand forecasts ──────────────────────────────────
     const demandForecastMap = await loadDemandForecast(allSkuIds)
 
-    // ── 7. Compute SD for every SKU, collect actionable rows ──────────────────
-    const plannedRows: PlannedPoRow[] = []
+    // ── 7. Compute SD for every SKU — keep every result (not just actionable) so
+    //       component MRP below can look up FG weekly demand regardless of the
+    //       FG's own flag ──────────────────────────────────────────────────────
+    const unifiedRows: UnifiedPlannedRow[] = []
+    const skuResultBySku = new Map<string, SkuSdResult>()
 
     for (const skuRaw of allSkus) {
       const sku = {
@@ -182,48 +205,235 @@ export default function PlannedPoPage() {
         thresholdMonitor: 8,
       })
 
+      skuResultBySku.set(skuRaw.sku, result)
+
       if (result.flag !== 'RELEASE_PO' && result.flag !== 'PLAN_PO') continue
 
-      // Resolve release-by monday date for display
-      const releaseWkInfo = result.plannedPoReleaseDateWk
-        ? wkByLabel[result.plannedPoReleaseDateWk]
-        : null
+      const releaseWkInfo = result.plannedPoReleaseDateWk ? wkByLabel[result.plannedPoReleaseDateWk] : null
       const releaseDateLabel = releaseWkInfo?.mondayDate ?? '—'
 
-      // Note: MOQ covers estimated weeks at current avg demand
-      const avgWklyDemand = result.weeks
-        .slice(0, 4).reduce((a, w) => a + w.forecastQty, 0) / 4 || 0
-      const moqCoverWks = avgWklyDemand > 0
-        ? Math.round(skuRaw.moq / avgWklyDemand)
-        : null
+      const avgWklyDemand = result.weeks.slice(0, 4).reduce((a, w) => a + w.forecastQty, 0) / 4 || 0
+      const moqCoverWks = avgWklyDemand > 0 ? Math.round(skuRaw.moq / avgWklyDemand) : null
       const note = [
         `MOQ (${skuRaw.moq.toLocaleString()} ${skuRaw.uom}) covers ~${moqCoverWks ?? '?'} wks at current demand.`,
         `Safety stock buffer: TBD.`,
       ].join(' ')
 
-      plannedRows.push({
+      const badge = FLAG_DISPLAY[result.flag]
+      unifiedRows.push({
+        level: 'FG',
         brand: skuRaw.brand,
-        sku: skuRaw.sku,
+        code: skuRaw.sku,
         description: skuRaw.description,
         uom: skuRaw.uom,
         leadTimeWk: skuRaw.lead_time_wk,
+        onHandQty: latestStock[skuRaw.sku] ?? null,
         woc: result.weeksOfCover,
         stockoutWk: result.stockoutWk ?? '—',
         releaseByWk: result.plannedPoReleaseDateWk ?? '—',
         releaseDateLabel,
         orderQty: skuRaw.moq,
-        flag: result.flag as 'RELEASE_PO' | 'PLAN_PO',
+        bucket: 'RELEASE_PO',
+        badgeLabel: badge.label,
+        badgeColor: badge.color,
         note,
       })
     }
 
+    // ── 8. Component-level (BOM) planned orders across accessible brands ─────
+    if (accessibleBrands.length > 0) {
+      const { data: projectRows } = await supabase
+        .from('projects').select('id, brand').in('brand', accessibleBrands)
+      const projectIds = (projectRows || []).map((p: any) => p.id)
+      const brandByProjectId = new Map((projectRows || []).map((p: any) => [p.id, p.brand]))
+
+      if (projectIds.length > 0) {
+        const { data: fgParts } = await supabase
+          .from('parts')
+          .select('part_number, description, master_sku_ref, project_id')
+          .in('project_id', projectIds)
+          .eq('category', 'FG')
+
+        const { data: bomData } = await supabase
+          .from('bom_lines')
+          .select('id, parent_pn, child_pn, bom_level, qty_per, uom, child:parts!bom_lines_child_pn_fkey(part_number, description, category, uom, on_hand_qty)')
+          .eq('is_active', true)
+
+        const { data: projectParts } = await supabase
+          .from('parts').select('part_number').in('project_id', projectIds)
+
+        const projectPns = new Set(projectParts?.map((p: any) => p.part_number) || [])
+        ;(fgParts || []).forEach((p: any) => projectPns.add(p.part_number))
+
+        const bomLines: BomLine[] = (bomData || [])
+          .filter((bl: any) => projectPns.has(bl.parent_pn) || projectPns.has(bl.child_pn))
+          .map((bl: any) => ({
+            partNumber: bl.child_pn,
+            parentPn: bl.parent_pn,
+            description: bl.child?.description || bl.child_pn,
+            category: bl.child?.category || 'RM',
+            bomLevel: bl.bom_level,
+            qtyPer: parseFloat(bl.qty_per),
+            uom: bl.uom,
+          }))
+
+        const compPns = [...new Set(bomLines.map(b => b.partNumber))]
+
+        const { data: psData } = compPns.length > 0
+          ? await supabase.from('part_supplier')
+              .select('part_number, moq, spq, lead_time_wk, supplier_id')
+              .in('part_number', compPns).eq('is_preferred', true)
+          : { data: [] as any[] }
+
+        const supIds = [...new Set((psData || []).map((ps: any) => ps.supplier_id).filter(Boolean))]
+        const { data: supData } = supIds.length > 0
+          ? await supabase.from('plm_suppliers').select('id, name').in('id', supIds)
+          : { data: [] as any[] }
+
+        const supNameMap = new Map((supData || []).map((s: any) => [s.id, s.name]))
+        const psMap = new Map((psData || []).map((ps: any) => [ps.part_number, ps]))
+
+        const { data: partsData } = compPns.length > 0
+          ? await supabase.from('parts')
+              .select('part_number, description, category, uom, on_hand_qty')
+              .in('part_number', compPns)
+          : { data: [] as any[] }
+
+        const components: ComponentMaster[] = (partsData || []).map((p: any) => {
+          const ps = psMap.get(p.part_number)
+          return {
+            partNumber: p.part_number,
+            description: p.description,
+            category: p.category,
+            uom: p.uom,
+            onHandQty: p.on_hand_qty ?? 0,
+            supplier: ps?.supplier_id ? supNameMap.get(ps.supplier_id) ?? null : null,
+            moq: ps?.moq ?? null,
+            spq: ps?.spq ?? null,
+            leadTimeWk: ps?.lead_time_wk ?? null,
+          }
+        })
+
+        // Aggregate across FG parts — a shared component (e.g. common cap/bottle)
+        // used by multiple FGs is netted per-FG (each MRP run starts from full
+        // on-hand), so totals here are additive across FGs, not cross-netted.
+        // Directionally useful for procurement; not a substitute for a full
+        // multi-FG netting run.
+        const componentAgg = new Map<string, {
+          comp: ComponentMaster
+          brand: string
+          orderQty: number
+          earliestWk: string | null
+          earliestFlag: 'OVERDUE' | 'URGENT' | 'PLAN' | 'OK' | null
+        }>()
+
+        for (const fgPart of (fgParts || [])) {
+          if (!fgPart.master_sku_ref) continue
+          const fgResult = skuResultBySku.get(fgPart.master_sku_ref)
+          if (!fgResult) continue
+
+          const fgDemandMap = new Map<string, number>()
+          fgResult.weeks.forEach(w => fgDemandMap.set(w.wkLabel, w.forecastQty))
+
+          const mrp = computeMRP({
+            fgPartNumber: fgPart.part_number,
+            bomLines,
+            components,
+            fgWeeklyDemand: fgDemandMap,
+            weeks: wkList,
+            currentWkLabel: CURRENT_WK,
+          })
+
+          const brand = brandByProjectId.get(fgPart.project_id) || ''
+
+          for (const compResult of mrp) {
+            if (compResult.totalPlannedOrderQty <= 0) continue
+
+            const releaseBatchQty = compResult.earliestPoReleaseWk
+              ? compResult.weeks
+                  .filter(w => w.poReleaseWk === compResult.earliestPoReleaseWk)
+                  .reduce((sum, w) => sum + w.plannedOrderQty, 0)
+              : compResult.totalPlannedOrderQty
+
+            const key = `${brand}::${compResult.component.partNumber}`
+            const existing = componentAgg.get(key)
+            if (!existing) {
+              componentAgg.set(key, {
+                comp: compResult.component,
+                brand,
+                orderQty: releaseBatchQty,
+                earliestWk: compResult.earliestPoReleaseWk,
+                earliestFlag: compResult.earliestPoReleaseFlag,
+              })
+            } else {
+              existing.orderQty += releaseBatchQty
+              // Keep the more urgent of the two flags/weeks
+              const order = { OVERDUE: 0, URGENT: 1, PLAN: 2, OK: 3 }
+              const curRank = existing.earliestFlag ? order[existing.earliestFlag] : 4
+              const newRank = compResult.earliestPoReleaseFlag ? order[compResult.earliestPoReleaseFlag] : 4
+              if (newRank < curRank) {
+                existing.earliestWk = compResult.earliestPoReleaseWk
+                existing.earliestFlag = compResult.earliestPoReleaseFlag
+              }
+            }
+          }
+        }
+
+        for (const { comp, brand, orderQty, earliestWk, earliestFlag } of componentAgg.values()) {
+          const releaseWkInfo = earliestWk ? wkByLabel[earliestWk] : null
+          const releaseDateLabel = releaseWkInfo?.mondayDate ?? '—'
+
+          let badgeLabel: string
+          let badgeColor: string
+          let bucket: Bucket
+
+          if (comp.leadTimeWk == null) {
+            badgeLabel = 'SET LT'
+            badgeColor = '#E8A33D'
+            bucket = 'PLAN_PO'
+          } else if (earliestFlag === 'OVERDUE') {
+            badgeLabel = 'OVERDUE'; badgeColor = '#C5453F'; bucket = 'RELEASE_PO'
+          } else if (earliestFlag === 'URGENT') {
+            badgeLabel = 'URGENT'; badgeColor = '#E8A33D'; bucket = 'RELEASE_PO'
+          } else {
+            badgeLabel = 'PLAN'; badgeColor = '#E8A33D'; bucket = 'PLAN_PO'
+          }
+
+          const note = [
+            `On-hand: ${comp.onHandQty.toLocaleString()} ${comp.uom}.`,
+            comp.supplier ? `Supplier: ${comp.supplier}.` : `No preferred supplier set.`,
+            comp.leadTimeWk == null ? `Lead time missing — set in Part Master to compute release date.` : '',
+          ].filter(Boolean).join(' ')
+
+          unifiedRows.push({
+            level: (comp.category as Level) || 'RM',
+            brand,
+            code: comp.partNumber,
+            description: comp.description,
+            uom: comp.uom,
+            leadTimeWk: comp.leadTimeWk,
+            onHandQty: comp.onHandQty,
+            woc: null,
+            stockoutWk: null,
+            releaseByWk: earliestWk ?? '—',
+            releaseDateLabel,
+            orderQty,
+            bucket,
+            badgeLabel,
+            badgeColor,
+            note,
+          })
+        }
+      }
+    }
+
     // Sort: RELEASE_PO first, then PLAN_PO; within each group by release date asc
-    plannedRows.sort((a, b) => {
-      if (a.flag !== b.flag) return a.flag === 'RELEASE_PO' ? -1 : 1
+    unifiedRows.sort((a, b) => {
+      if (a.bucket !== b.bucket) return a.bucket === 'RELEASE_PO' ? -1 : 1
       return a.releaseByWk.localeCompare(b.releaseByWk)
     })
 
-    setRows(plannedRows)
+    setRows(unifiedRows)
     setLoading(false)
   }
 
@@ -231,16 +441,12 @@ export default function PlannedPoPage() {
 
   function exportCsv() {
     const headers = [
-      'Priority', 'Brand', 'SKU', 'Description', 'UOM',
-      'LT (wks)', 'WoC (wks)', 'Stockout Week', 'Release By (Week)',
-      'Release By (Date)', 'Order Qty (MOQ)', 'Note'
+      'Priority', 'Level', 'Brand', 'Code', 'Description', 'UOM',
+      'LT (wks)', 'On Hand', 'Release By (Week)', 'Release By (Date)', 'Order Qty', 'Note'
     ]
-    const visibleRows = filterFlag === 'ALL' ? rows : rows.filter(r => r.flag === filterFlag)
     const csvRows = visibleRows.map(r => [
-      r.flag === 'RELEASE_PO' ? 'RELEASE PO' : 'PLAN PO',
-      r.brand, r.sku, `"${r.description}"`, r.uom,
-      r.leadTimeWk, r.woc, r.stockoutWk, r.releaseByWk,
-      r.releaseDateLabel, r.orderQty, `"${r.note}"`
+      r.badgeLabel, r.level, r.brand, r.code, `"${r.description}"`, r.uom,
+      r.leadTimeWk ?? '—', r.onHandQty ?? '—', r.releaseByWk, r.releaseDateLabel, r.orderQty, `"${r.note}"`
     ])
     const csv = [headers, ...csvRows].map(row => row.join(',')).join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
@@ -254,9 +460,12 @@ export default function PlannedPoPage() {
 
   // ── render ────────────────────────────────────────────────────────────────────
 
-  const visibleRows = filterFlag === 'ALL' ? rows : rows.filter(r => r.flag === filterFlag)
-  const releaseCount = rows.filter(r => r.flag === 'RELEASE_PO').length
-  const planCount = rows.filter(r => r.flag === 'PLAN_PO').length
+  const levelFiltered = filterLevel === 'ALL' ? rows : filterLevel === 'FG' ? rows.filter(r => r.level === 'FG') : rows.filter(r => r.level !== 'FG')
+  const visibleRows = filterFlag === 'ALL' ? levelFiltered : levelFiltered.filter(r => r.bucket === filterFlag)
+  const releaseCount = levelFiltered.filter(r => r.bucket === 'RELEASE_PO').length
+  const planCount = levelFiltered.filter(r => r.bucket === 'PLAN_PO').length
+  const fgCount = rows.filter(r => r.level === 'FG').length
+  const componentCount = rows.filter(r => r.level !== 'FG').length
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: '#F4F2EE' }}>
@@ -294,46 +503,68 @@ export default function PlannedPoPage() {
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {loading ? (
             <div className="flex items-center justify-center h-40 text-sm" style={{ color: '#4B5563' }}>
-              Computing replenishment queue across all SKUs...
+              Computing replenishment queue across all SKUs and BOM components...
             </div>
           ) : (
             <>
               {/* KPI strip */}
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-4 gap-4">
                 <div className="bg-white rounded-xl p-4" style={{ border: '1px solid #E4DDD3' }}>
                   <div className="text-xs mb-1" style={{ color: '#4B5563' }}>Release PO</div>
                   <div className="text-2xl font-semibold" style={{ color: '#C5453F', fontFamily: 'Cambria, Georgia, serif' }}>{releaseCount}</div>
-                  <div className="text-xs mt-1" style={{ color: '#4B5563' }}>POs overdue or due within LT window</div>
+                  <div className="text-xs mt-1" style={{ color: '#4B5563' }}>Overdue or due within lead time</div>
                 </div>
                 <div className="bg-white rounded-xl p-4" style={{ border: '1px solid #E4DDD3' }}>
                   <div className="text-xs mb-1" style={{ color: '#4B5563' }}>Plan PO</div>
                   <div className="text-2xl font-semibold" style={{ color: '#E8A33D', fontFamily: 'Cambria, Georgia, serif' }}>{planCount}</div>
-                  <div className="text-xs mt-1" style={{ color: '#4B5563' }}>Stockout projected beyond LT — plan ahead</div>
+                  <div className="text-xs mt-1" style={{ color: '#4B5563' }}>Due beyond lead time — plan ahead</div>
                 </div>
                 <div className="bg-white rounded-xl p-4" style={{ border: '1px solid #E4DDD3' }}>
-                  <div className="text-xs mb-1" style={{ color: '#4B5563' }}>Total SKUs Flagged</div>
-                  <div className="text-2xl font-semibold" style={{ color: '#1F2937', fontFamily: 'Cambria, Georgia, serif' }}>{rows.length}</div>
-                  <div className="text-xs mt-1" style={{ color: '#4B5563' }}>Across all accessible brands</div>
+                  <div className="text-xs mb-1" style={{ color: '#4B5563' }}>FG SKUs Flagged</div>
+                  <div className="text-2xl font-semibold" style={{ color: '#1F2937', fontFamily: 'Cambria, Georgia, serif' }}>{fgCount}</div>
+                  <div className="text-xs mt-1" style={{ color: '#4B5563' }}>Finished goods needing a PO</div>
+                </div>
+                <div className="bg-white rounded-xl p-4" style={{ border: '1px solid #E4DDD3' }}>
+                  <div className="text-xs mb-1" style={{ color: '#4B5563' }}>Components Flagged</div>
+                  <div className="text-2xl font-semibold" style={{ color: '#1F2937', fontFamily: 'Cambria, Georgia, serif' }}>{componentCount}</div>
+                  <div className="text-xs mt-1" style={{ color: '#4B5563' }}>RM/PK/SA/WIP needing a PO</div>
                 </div>
               </div>
 
               {/* Filter tabs */}
-              <div className="flex items-center gap-2">
-                {(['ALL', 'RELEASE_PO', 'PLAN_PO'] as const).map(f => (
-                  <button
-                    key={f}
-                    onClick={() => setFilterFlag(f)}
-                    className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-colors ${
-                      filterFlag === f
-                        ? 'bg-[#1F2937] text-white border-[#1F2937]'
-                        : 'bg-white border-[#E4DDD3] hover:bg-[#F4F2EE]'
-                    }`}
-                  >
-                    {f === 'ALL' ? `All (${rows.length})`
-                     : f === 'RELEASE_PO' ? `Release PO (${releaseCount})`
-                     : `Plan PO (${planCount})`}
-                  </button>
-                ))}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {(['ALL', 'RELEASE_PO', 'PLAN_PO'] as const).map(f => (
+                    <button
+                      key={f}
+                      onClick={() => setFilterFlag(f)}
+                      className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-colors ${
+                        filterFlag === f
+                          ? 'bg-[#1F2937] text-white border-[#1F2937]'
+                          : 'bg-white border-[#E4DDD3] hover:bg-[#F4F2EE]'
+                      }`}
+                    >
+                      {f === 'ALL' ? `All (${levelFiltered.length})`
+                       : f === 'RELEASE_PO' ? `Release PO (${releaseCount})`
+                       : `Plan PO (${planCount})`}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2">
+                  {(['ALL', 'FG', 'COMPONENT'] as const).map(f => (
+                    <button
+                      key={f}
+                      onClick={() => setFilterLevel(f)}
+                      className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-colors ${
+                        filterLevel === f
+                          ? 'bg-[#1F2937] text-white border-[#1F2937]'
+                          : 'bg-white border-[#E4DDD3] hover:bg-[#F4F2EE]'
+                      }`}
+                    >
+                      {f === 'ALL' ? 'All Levels' : f === 'FG' ? `FG (${fgCount})` : `Components (${componentCount})`}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               {/* Table */}
@@ -346,51 +577,64 @@ export default function PlannedPoPage() {
                   <table className="w-full text-xs">
                     <thead>
                       <tr style={{ background: '#F4F2EE', borderBottom: '1px solid #E4DDD3' }}>
-                        <th className="text-left px-4 py-3 font-medium w-28" style={{ color: '#4B5563' }}>Priority</th>
+                        <th className="text-left px-4 py-3 font-medium w-24" style={{ color: '#4B5563' }}>Priority</th>
+                        <th className="text-left px-4 py-3 font-medium w-16" style={{ color: '#4B5563' }}>Level</th>
                         <th className="text-left px-4 py-3 font-medium" style={{ color: '#4B5563' }}>Brand</th>
-                        <th className="text-left px-4 py-3 font-medium" style={{ color: '#4B5563' }}>SKU</th>
+                        <th className="text-left px-4 py-3 font-medium" style={{ color: '#4B5563' }}>Code</th>
                         <th className="text-left px-4 py-3 font-medium max-w-[200px]" style={{ color: '#4B5563' }}>Description</th>
                         <th className="text-center px-4 py-3 font-medium" style={{ color: '#4B5563' }}>LT (wks)</th>
-                        <th className="text-center px-4 py-3 font-medium" style={{ color: '#4B5563' }}>WoC (wks)</th>
-                        <th className="text-center px-4 py-3 font-medium" style={{ color: '#4B5563' }}>Stockout Wk</th>
+                        <th className="text-center px-4 py-3 font-medium" style={{ color: '#4B5563' }}>On Hand</th>
                         <th className="text-center px-4 py-3 font-medium" style={{ color: '#4B5563' }}>Release By</th>
                         <th className="text-right px-4 py-3 font-medium" style={{ color: '#4B5563' }}>Order Qty</th>
                         <th className="text-left px-4 py-3 font-medium w-8"></th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#E4DDD3]">
-                      {visibleRows.map((row, i) => (
-                        <tr key={`${row.sku}-${i}`} className="hover:bg-[#F4F2EE] transition-colors">
+                      {visibleRows.map((row, i) => {
+                        const lvlColor = LEVEL_COLORS[row.level] || LEVEL_COLORS.RM
+                        return (
+                        <tr key={`${row.level}-${row.code}-${i}`} className="hover:bg-[#F4F2EE] transition-colors">
 
                           {/* Priority badge */}
                           <td className="px-4 py-3">
-                            {row.flag === 'RELEASE_PO' ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium text-[11px]" style={{ background: '#FAEAEA', color: '#C5453F', border: '1px solid #F5C6C4' }}>
-                                <AlertTriangle size={10} /> Release PO
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium text-[11px]" style={{ background: '#FEF3E2', color: '#E8A33D', border: '1px solid #F9DEB8' }}>
-                                <Clock size={10} /> Plan PO
-                              </span>
-                            )}
+                            <span
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium text-[11px]"
+                              style={{
+                                background: row.bucket === 'RELEASE_PO' ? '#FAEAEA' : '#FEF3E2',
+                                color: row.badgeColor,
+                                border: `1px solid ${row.bucket === 'RELEASE_PO' ? '#F5C6C4' : '#F9DEB8'}`,
+                              }}
+                            >
+                              {row.bucket === 'RELEASE_PO' ? <AlertTriangle size={10} /> : <Clock size={10} />}
+                              {row.badgeLabel}
+                            </span>
+                          </td>
+
+                          {/* Level badge */}
+                          <td className="px-4 py-3">
+                            <span
+                              className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                              style={{ background: lvlColor.bg, color: lvlColor.text }}
+                            >
+                              {row.level}
+                            </span>
                           </td>
 
                           <td className="px-4 py-3 font-medium" style={{ color: '#1F2937' }}>{row.brand}</td>
-                          <td className="px-4 py-3 font-mono font-medium" style={{ color: '#1F2937' }}>{row.sku}</td>
+                          <td className="px-4 py-3 font-mono font-medium" style={{ color: '#1F2937' }}>{row.code}</td>
                           <td className="px-4 py-3 max-w-[200px] truncate" style={{ color: '#4B5563' }} title={row.description}>
                             {row.description}
                           </td>
 
                           {/* LT */}
-                          <td className="px-4 py-3 text-center" style={{ color: '#1F2937' }}>{row.leadTimeWk}</td>
+                          <td className="px-4 py-3 text-center" style={{ color: row.leadTimeWk == null ? '#E8A33D' : '#1F2937' }}>
+                            {row.leadTimeWk ?? '—'}
+                          </td>
 
-                          {/* WoC — colour by urgency */}
-                          <td className="px-4 py-3 text-center font-medium" style={{
-                            color: row.woc < 4 ? '#C5453F' : row.woc < 8 ? '#E8A33D' : '#1F2937'
-                          }}>{row.woc}</td>
-
-                          {/* Stockout week */}
-                          <td className="px-4 py-3 text-center" style={{ color: '#1F2937' }}>{row.stockoutWk}</td>
+                          {/* On hand */}
+                          <td className="px-4 py-3 text-center" style={{ color: '#1F2937' }}>
+                            {row.onHandQty != null ? row.onHandQty.toLocaleString() : '—'}
+                          </td>
 
                           {/* Release by — flag overdue in red */}
                           <td className="px-4 py-3 text-center">
@@ -423,7 +667,7 @@ export default function PlannedPoPage() {
                           </td>
 
                         </tr>
-                      ))}
+                      )})}
                     </tbody>
                   </table>
                 </div>
