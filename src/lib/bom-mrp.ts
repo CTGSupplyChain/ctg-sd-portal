@@ -37,11 +37,13 @@ export interface ComponentMaster {
 export interface ComponentWeekRow {
   wkLabel: string
   grossReq: number      // FG demand × extended qty_per
-  netReq: number        // grossReq − remaining on-hand (rolling)
+  netReq: number        // grossReq − remaining on-hand (rolling, net of real supply commit)
   plannedOrderQty: number  // net req rounded up to MOQ multiple
   poReleaseWk: string | null  // wkLabel of when PO must be released
   poReleaseFlag: 'OVERDUE' | 'URGENT' | 'PLAN' | 'OK' | null
-  balance: number       // projected on-hand: prior balance − grossReq + plannedOrderQty (supply commit)
+  supplyUncommit: number  // component POs placed but not yet confirmed (no delivery date)
+  supplyCommit: number    // component POs confirmed for this receipt week (real, from purchase_orders)
+  balance: number       // projected on-hand: prior balance − grossReq + supplyCommit (real committed supply)
 }
 
 export interface ComponentMrpResult {
@@ -115,6 +117,8 @@ export function calcPoReleaseWk(
  * @param fgWeeklyDemand  Map of wkLabel → FG demand qty (from S&D output)
  * @param weeks         Ordered week list
  * @param currentWkLabel  Current week label
+ * @param componentSupplyCommits    partNumber → wkLabel → committed qty (real component POs with a delivery date)
+ * @param componentSupplyUncommits  partNumber → wkLabel → uncommitted qty (real component POs with no delivery date yet)
  */
 export function computeMRP(params: {
   fgPartNumber: string
@@ -123,8 +127,13 @@ export function computeMRP(params: {
   fgWeeklyDemand: Map<string, number>  // wkLabel → FG demand units
   weeks: Array<{ label: string }>
   currentWkLabel: string
+  componentSupplyCommits?: Record<string, Record<string, number>>
+  componentSupplyUncommits?: Record<string, Record<string, number>>
 }): ComponentMrpResult[] {
-  const { fgPartNumber, bomLines, components, fgWeeklyDemand, weeks, currentWkLabel } = params
+  const {
+    fgPartNumber, bomLines, components, fgWeeklyDemand, weeks, currentWkLabel,
+    componentSupplyCommits = {}, componentSupplyUncommits = {},
+  } = params
 
   const allWkLabels = weeks.map(w => w.label)
   const compMap = new Map(components.map(c => [c.partNumber, c]))
@@ -182,9 +191,15 @@ export function computeMRP(params: {
     const comp = compMap.get(compPn)
     if (!comp) continue  // skip if no master data
 
-    // Rolling on-hand — starts at component's current stock
+    const commitsByWk = componentSupplyCommits[compPn] || {}
+    const uncommitsByWk = componentSupplyUncommits[compPn] || {}
+
+    // Rolling on-hand — starts at component's current stock. Net requirement
+    // is computed against on-hand + real committed supply for that week, so a
+    // component PO already placed reduces (or clears) the suggested Planned PO.
     let rollingBalance = comp.onHandQty
-    // Projected balance for display — on-hand + supply (commit) − demand, carried week to week
+    // Projected balance for display — mirrors the FG S&D pattern exactly:
+    // balance = prior balance − demand + supply (commit, real placed POs).
     let displayBalance = comp.onHandQty
 
     let totalGross = 0
@@ -197,10 +212,13 @@ export function computeMRP(params: {
     for (const wk of weeks) {
       const fgDemand = fgWeeklyDemand.get(wk.label) || 0
       const grossReq = fgDemand * extQty
+      const supplyCommit = commitsByWk[wk.label] || 0
+      const supplyUncommit = uncommitsByWk[wk.label] || 0
 
-      // Net requirement after consuming available stock
-      const netReq = Math.max(0, grossReq - rollingBalance)
-      rollingBalance = Math.max(0, rollingBalance - grossReq)
+      // Net requirement after consuming available stock + real committed supply
+      const availableThisWeek = rollingBalance + supplyCommit
+      const netReq = Math.max(0, grossReq - availableThisWeek)
+      rollingBalance = Math.max(0, availableThisWeek - grossReq)
 
       const plannedOrderQty = netReq > 0
         ? roundUpToMoq(netReq, comp.moq, comp.spq)
@@ -226,8 +244,8 @@ export function computeMRP(params: {
       totalGross += grossReq
       totalPlanned += plannedOrderQty
 
-      // Balance = prior balance − demand (gross req) + supply (commit, i.e. planned order qty)
-      displayBalance = displayBalance - grossReq + plannedOrderQty
+      // Balance = prior balance − demand (gross req) + supply (commit, real placed component POs)
+      displayBalance = displayBalance - grossReq + supplyCommit
 
       weekRows.push({
         wkLabel: wk.label,
@@ -236,6 +254,8 @@ export function computeMRP(params: {
         plannedOrderQty,
         poReleaseWk,
         poReleaseFlag,
+        supplyUncommit: Math.round(supplyUncommit),
+        supplyCommit: Math.round(supplyCommit),
         balance: Math.round(displayBalance),
       })
     }
