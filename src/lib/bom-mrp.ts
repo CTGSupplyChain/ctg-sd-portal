@@ -41,6 +41,7 @@ export interface ComponentWeekRow {
   plannedOrderQty: number  // net req rounded up to MOQ multiple
   poReleaseWk: string | null  // wkLabel of when PO must be released
   poReleaseFlag: 'OVERDUE' | 'URGENT' | 'PLAN' | 'OK' | null
+  balance: number       // projected on-hand: prior balance − grossReq + plannedOrderQty (supply commit)
 }
 
 export interface ComponentMrpResult {
@@ -183,6 +184,8 @@ export function computeMRP(params: {
 
     // Rolling on-hand — starts at component's current stock
     let rollingBalance = comp.onHandQty
+    // Projected balance for display — on-hand + supply (commit) − demand, carried week to week
+    let displayBalance = comp.onHandQty
 
     let totalGross = 0
     let totalPlanned = 0
@@ -223,6 +226,9 @@ export function computeMRP(params: {
       totalGross += grossReq
       totalPlanned += plannedOrderQty
 
+      // Balance = prior balance − demand (gross req) + supply (commit, i.e. planned order qty)
+      displayBalance = displayBalance - grossReq + plannedOrderQty
+
       weekRows.push({
         wkLabel: wk.label,
         grossReq: Math.round(grossReq),
@@ -230,6 +236,7 @@ export function computeMRP(params: {
         plannedOrderQty,
         poReleaseWk,
         poReleaseFlag,
+        balance: Math.round(displayBalance),
       })
     }
 
