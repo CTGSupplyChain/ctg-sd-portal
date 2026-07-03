@@ -14,6 +14,14 @@ interface UploadResult {
   invalid_skus: string[]
 }
 
+interface ComponentUploadResult {
+  success: boolean
+  total_rows: number
+  upserted: number
+  skipped: number
+  invalid_part_numbers: string[]
+}
+
 interface SyncPreviewRow {
   po_number: string
   sku: string
@@ -53,6 +61,24 @@ interface PurchaseOrder {
   id: number
   po_number: string
   sku: string
+  brand: string | null
+  supplier_name: string | null
+  qty: number
+  qty_shipped: number | null
+  balance_qty: number | null
+  unit_price: number | null
+  delivery_date: string | null
+  receipt_wk: string | null
+  status: string
+  commit_status: string | null
+  notes: string | null
+  updated_at: string | null
+}
+
+interface ComponentPurchaseOrder {
+  id: number
+  po_number: string
+  part_number: string
   brand: string | null
   supplier_name: string | null
   qty: number
@@ -149,7 +175,11 @@ export default function SupplyInputPage() {
   )
   const router = useRouter()
 
-  // Upload state
+  // Tab state — FG SKUs vs BOM Components. Same purchase_orders table,
+  // filtered/keyed by sku vs part_number respectively.
+  const [mode, setMode] = useState<'FG' | 'COMPONENT'>('FG')
+
+  // ── FG upload state ──────────────────────────────────────────────────────
   const [file, setFile] = useState<File | null>(null)
   const [dragging, setDragging] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -157,21 +187,21 @@ export default function SupplyInputPage() {
   const [error, setError] = useState<string | null>(null)
   const [lastUploaded, setLastUploaded] = useState<string | null>(null)
 
-  // List state
+  // FG list state
   const [pos, setPos] = useState<PurchaseOrder[]>([])
   const [listLoading, setListLoading] = useState(true)
   const [listError, setListError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('All')
 
-  // Inline edit state
+  // FG inline edit state
   const [editingCell, setEditingCell] = useState<EditingCell>(null)
   const [editValue, setEditValue] = useState<string>('')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<{ id: number; msg: string } | null>(null)
   const inputRef = useRef<HTMLInputElement | HTMLSelectElement>(null)
 
-  // Role + sheet sync state
+  // Role + sheet sync state (FG only — no sheet source for components yet)
   const [role, setRole] = useState<string | null>(null)
   const [syncLoading, setSyncLoading] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
@@ -179,10 +209,35 @@ export default function SupplyInputPage() {
   const [syncCommitting, setSyncCommitting] = useState(false)
   const [syncResult, setSyncResult] = useState<SyncCommitResult | null>(null)
 
-  useEffect(() => { loadPos(); loadRole() }, [])
+  // ── Component upload state ───────────────────────────────────────────────
+  const [componentFile, setComponentFile] = useState<File | null>(null)
+  const [componentDragging, setComponentDragging] = useState(false)
+  const [componentLoading, setComponentLoading] = useState(false)
+  const [componentResult, setComponentResult] = useState<ComponentUploadResult | null>(null)
+  const [componentError, setComponentError] = useState<string | null>(null)
+  const [componentLastUploaded, setComponentLastUploaded] = useState<string | null>(null)
+
+  // Component list state
+  const [componentPos, setComponentPos] = useState<ComponentPurchaseOrder[]>([])
+  const [componentListLoading, setComponentListLoading] = useState(true)
+  const [componentListError, setComponentListError] = useState<string | null>(null)
+  const [componentSearch, setComponentSearch] = useState('')
+  const [componentStatusFilter, setComponentStatusFilter] = useState('All')
+
+  // Component inline edit state
+  const [componentEditingCell, setComponentEditingCell] = useState<EditingCell>(null)
+  const [componentEditValue, setComponentEditValue] = useState<string>('')
+  const [componentSaving, setComponentSaving] = useState(false)
+  const [componentSaveError, setComponentSaveError] = useState<{ id: number; msg: string } | null>(null)
+  const componentInputRef = useRef<HTMLInputElement | HTMLSelectElement>(null)
+
+  useEffect(() => { loadPos(); loadComponentPos(); loadRole() }, [])
   useEffect(() => {
     if (editingCell && inputRef.current) inputRef.current.focus()
   }, [editingCell])
+  useEffect(() => {
+    if (componentEditingCell && componentInputRef.current) componentInputRef.current.focus()
+  }, [componentEditingCell])
 
   async function loadRole() {
     const { data: { session } } = await supabase.auth.getSession()
@@ -196,12 +251,28 @@ export default function SupplyInputPage() {
     const { data, error: err } = await supabase
       .from('purchase_orders')
       .select('id, po_number, sku, brand, supplier_name, qty, qty_shipped, balance_qty, unit_price, delivery_date, receipt_wk, status, commit_status, notes, updated_at')
+      .not('sku', 'is', null)
       .order('updated_at', { ascending: false })
       .limit(1000)
     if (err) { setListError(err.message); setListLoading(false); return }
     setPos(data ?? [])
     setListLoading(false)
   }
+
+  async function loadComponentPos() {
+    setComponentListLoading(true); setComponentListError(null)
+    const { data, error: err } = await supabase
+      .from('purchase_orders')
+      .select('id, po_number, part_number, brand, supplier_name, qty, qty_shipped, balance_qty, unit_price, delivery_date, receipt_wk, status, commit_status, notes, updated_at')
+      .not('part_number', 'is', null)
+      .order('updated_at', { ascending: false })
+      .limit(1000)
+    if (err) { setComponentListError(err.message); setComponentListLoading(false); return }
+    setComponentPos(data ?? [])
+    setComponentListLoading(false)
+  }
+
+  // ── FG inline edit ───────────────────────────────────────────────────────
 
   function startEdit(id: number, field: string, currentValue: string | number | null) {
     if (saving) return
@@ -249,7 +320,6 @@ export default function SupplyInputPage() {
         setPos(prev => prev.map(p => p.id === id ? { ...p, [field]: originalVal } : p))
         setSaveError({ id, msg: err.error || 'Save failed' })
       } else {
-        // Refresh row to pick up server-recomputed fields (balance_qty, receipt_wk, etc.)
         loadPos()
       }
     } catch (e: any) {
@@ -264,6 +334,70 @@ export default function SupplyInputPage() {
     if (e.key === 'Enter') commitEdit()
     if (e.key === 'Escape') cancelEdit()
   }
+
+  // ── Component inline edit ────────────────────────────────────────────────
+
+  function startComponentEdit(id: number, field: string, currentValue: string | number | null) {
+    if (componentSaving) return
+    setComponentSaveError(null)
+    setComponentEditingCell({ id, field })
+    setComponentEditValue(currentValue == null ? '' : String(currentValue))
+  }
+
+  function cancelComponentEdit() {
+    setComponentEditingCell(null)
+    setComponentEditValue('')
+  }
+
+  async function commitComponentEdit() {
+    if (!componentEditingCell) return
+    const { id, field } = componentEditingCell
+    const original = componentPos.find(p => p.id === id)
+    if (!original) return cancelComponentEdit()
+
+    let parsed: string | number | null = componentEditValue.trim()
+    if (field === 'qty' || field === 'qty_shipped') parsed = parseInt(componentEditValue) || 0
+    else if (field === 'unit_price') parsed = parseFloat(componentEditValue) || 0
+    else if (field === 'delivery_date') parsed = parsed || null
+
+    const originalVal = (original as any)[field]
+    if (String(parsed ?? '') === String(originalVal ?? '')) return cancelComponentEdit()
+
+    setComponentPos(prev => prev.map(p => p.id === id ? { ...p, [field]: parsed } : p))
+    setComponentEditingCell(null)
+    setComponentSaving(true)
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/api/supply-input-component', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token ?? ''}`,
+        },
+        body: JSON.stringify({ id, [field]: parsed }),
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        setComponentPos(prev => prev.map(p => p.id === id ? { ...p, [field]: originalVal } : p))
+        setComponentSaveError({ id, msg: err.error || 'Save failed' })
+      } else {
+        loadComponentPos()
+      }
+    } catch (e: any) {
+      setComponentPos(prev => prev.map(p => p.id === id ? { ...p, [field]: originalVal } : p))
+      setComponentSaveError({ id, msg: e.message || 'Save failed' })
+    } finally {
+      setComponentSaving(false)
+    }
+  }
+
+  function handleComponentKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter') commitComponentEdit()
+    if (e.key === 'Escape') cancelComponentEdit()
+  }
+
+  // ── FG upload ─────────────────────────────────────────────────────────────
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -310,6 +444,56 @@ export default function SupplyInputPage() {
       setLoading(false)
     }
   }
+
+  // ── Component upload ─────────────────────────────────────────────────────
+
+  const handleComponentDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setComponentDragging(false)
+    const dropped = e.dataTransfer.files[0]
+    if (dropped?.name.endsWith('.xlsx')) {
+      setComponentFile(dropped); setComponentResult(null); setComponentError(null)
+    } else {
+      setComponentError('Please upload an .xlsx file.')
+    }
+  }, [])
+
+  const handleComponentFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = e.target.files?.[0]
+    if (selected) { setComponentFile(selected); setComponentResult(null); setComponentError(null) }
+  }
+
+  const handleComponentUpload = async () => {
+    if (!componentFile) return
+    setComponentLoading(true); setComponentError(null); setComponentResult(null)
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) { router.push('/login'); return }
+
+      const formData = new FormData()
+      formData.append('file', componentFile)
+
+      const res = await fetch('/api/supply-input-component', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        body: formData,
+      })
+
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Upload failed')
+
+      setComponentResult(json)
+      setComponentLastUploaded(new Date().toLocaleString('en-MY', { timeZone: 'Asia/Kuala_Lumpur' }))
+      loadComponentPos()
+    } catch (e: any) {
+      setComponentError(e.message)
+    } finally {
+      setComponentLoading(false)
+    }
+  }
+
+  // ── FG sheet sync (no component equivalent yet — no source sheet) ────────
 
   async function handleSyncPreview() {
     setSyncLoading(true); setSyncError(null); setSyncResult(null); setSyncPreview(null)
@@ -382,23 +566,59 @@ export default function SupplyInputPage() {
     return pos.filter(p => p.status === 'Open' && p.delivery_date && p.delivery_date < today && (p.balance_qty ?? p.qty) > 0).length
   }, [pos])
 
-  function isDelayed(p: PurchaseOrder) {
+  function isDelayed(p: PurchaseOrder | ComponentPurchaseOrder) {
     const today = new Date().toISOString().split('T')[0]
     return p.status === 'Open' && !!p.delivery_date && p.delivery_date < today && (p.balance_qty ?? p.qty) > 0
   }
+
+  const componentFiltered = useMemo(() => componentPos.filter(p => {
+    const q = componentSearch.toLowerCase()
+    return (
+      (!componentSearch || p.po_number.toLowerCase().includes(q) || p.part_number.toLowerCase().includes(q) || (p.supplier_name ?? '').toLowerCase().includes(q)) &&
+      (componentStatusFilter === 'All' || p.status === componentStatusFilter)
+    )
+  }), [componentPos, componentSearch, componentStatusFilter])
+
+  const componentOpenCount = componentPos.filter(p => p.status === 'Open').length
+  const componentDelayedCount = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0]
+    return componentPos.filter(p => p.status === 'Open' && p.delivery_date && p.delivery_date < today && (p.balance_qty ?? p.qty) > 0).length
+  }, [componentPos])
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-10">
       <div className="flex items-center gap-3 mb-6">
         <BackToSD />
         <div className="w-px h-4 bg-[#E4DDD3]" />
-        <h1 className="text-sm font-semibold text-[#1F2937]">Supply Input â Open POs</h1>
+        <h1 className="text-sm font-semibold text-[#1F2937]">Supply Input — Open POs</h1>
       </div>
-      <p className="text-sm text-[#4B5563] mb-8">
-        Upload the weekly Open PO file (.xlsx). Records are upserted by PO Number + SKU. Missing POs are kept as-is.
-        Click any cell below to edit a record directly.
+      <p className="text-sm text-[#4B5563] mb-5">
+        Upload the weekly Open PO file (.xlsx). Records are upserted by PO Number + SKU (or PO Number + Part Number for components).
+        Missing POs are kept as-is. Click any cell below to edit a record directly.
       </p>
 
+      {/* Mode tabs */}
+      <div className="flex items-center gap-2 mb-6">
+        <button
+          onClick={() => setMode('FG')}
+          className={`text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors ${
+            mode === 'FG' ? 'bg-[#1F2937] text-white border-[#1F2937]' : 'bg-white border-[#E4DDD3] text-[#4B5563] hover:bg-[#F4F2EE]'
+          }`}
+        >
+          FG SKUs ({pos.length})
+        </button>
+        <button
+          onClick={() => setMode('COMPONENT')}
+          className={`text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors ${
+            mode === 'COMPONENT' ? 'bg-[#1F2937] text-white border-[#1F2937]' : 'bg-white border-[#E4DDD3] text-[#4B5563] hover:bg-[#F4F2EE]'
+          }`}
+        >
+          Components ({componentPos.length})
+        </button>
+      </div>
+
+      {mode === 'FG' && (
+      <>
       {/* Upload section */}
       <div className="bg-[#DCEAE8] border border-[#DCEAE8] rounded-xl px-4 py-3 mb-4 flex items-center justify-between">
         <div>
@@ -474,14 +694,14 @@ export default function SupplyInputPage() {
             <div className="mt-2 bg-[#FEF3E2] border border-[#F9DEB8] rounded-md px-3 py-2">
               <p className="text-xs font-medium text-yellow-800 mb-1">Unrecognized SKUs (not saved):</p>
               <ul className="text-xs text-[#E8A33D] space-y-0.5">
-                {result.invalid_skus.map(sku => <li key={sku}>â¢ {sku}</li>)}
+                {result.invalid_skus.map(sku => <li key={sku}>• {sku}</li>)}
               </ul>
             </div>
           )}
         </div>
       )}
 
-      {/* âââââââââââââ PO List âââââââââââââ */}
+      {/* ───────────── PO List ───────────── */}
       <div className="mt-10">
         <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
       {/* ───────────── Sync from Sheet (supply_chain only) ───────────── */}
@@ -670,65 +890,63 @@ export default function SupplyInputPage() {
                   const delayed = isDelayed(p)
                   return (
                     <tr key={p.id} className={`border-b border-[#E4DDD3] last:border-0 transition-colors ${delayed ? 'bg-[#FAEAEA]/40' : ''}`}>
-                      {/* PO Number â read only */}
+                      {/* PO Number — read only */}
                       <td className="px-3 py-2.5">
                         <span className="font-mono text-[11px] text-[#1F2937]">{p.po_number}</span>
                         {delayed && (
                           <span className="ml-2 inline-block text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-[#FAEAEA] text-[#C5453F] align-middle">Delayed</span>
                         )}
                       </td>
-                      {/* SKU â read only */}
+                      {/* SKU — read only */}
                       <td className="px-3 py-2.5">
                         <span className="font-mono text-[11px] text-[#1F2937]">{p.sku}</span>
                         {p.brand && <p className="text-[10px] text-[#4B5563] mt-0.5">{p.brand}</p>}
                       </td>
-                      {/* Supplier â editable */}
+                      {/* Supplier — editable */}
                       <EditableCell
                         id={p.id} field="supplier_name" value={p.supplier_name} align="left"
-                        display={<span className="text-xs text-[#4B5563]">{p.supplier_name || 'â'}</span>}
-                      
-                editingCell={editingCell} saveError={saveError} inputRef={inputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={editValue} setEditValue={setEditValue} handleKeyDown={handleKeyDown} commitEdit={commitEdit} cancelEdit={cancelEdit} startEdit={startEdit}
+                        display={<span className="text-xs text-[#4B5563]">{p.supplier_name || '—'}</span>}
+                        editingCell={editingCell} saveError={saveError} inputRef={inputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={editValue} setEditValue={setEditValue} handleKeyDown={handleKeyDown} commitEdit={commitEdit} cancelEdit={cancelEdit} startEdit={startEdit}
                       />
-                      {/* Qty â editable */}
+                      {/* Qty — editable */}
                       <EditableCell
                         id={p.id} field="qty" value={p.qty} inputType="number"
                         display={<span className="text-xs text-[#1F2937]">{p.qty?.toLocaleString()}</span>}
-                editingCell={editingCell} saveError={saveError} inputRef={inputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={editValue} setEditValue={setEditValue} handleKeyDown={handleKeyDown} commitEdit={commitEdit} cancelEdit={cancelEdit} startEdit={startEdit}
+                        editingCell={editingCell} saveError={saveError} inputRef={inputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={editValue} setEditValue={setEditValue} handleKeyDown={handleKeyDown} commitEdit={commitEdit} cancelEdit={cancelEdit} startEdit={startEdit}
                       />
-                      {/* Qty Shipped â editable */}
+                      {/* Qty Shipped — editable */}
                       <EditableCell
                         id={p.id} field="qty_shipped" value={p.qty_shipped} inputType="number"
                         display={<span className="text-xs text-[#4B5563]">{(p.qty_shipped ?? 0).toLocaleString()}</span>}
-                editingCell={editingCell} saveError={saveError} inputRef={inputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={editValue} setEditValue={setEditValue} handleKeyDown={handleKeyDown} commitEdit={commitEdit} cancelEdit={cancelEdit} startEdit={startEdit}
+                        editingCell={editingCell} saveError={saveError} inputRef={inputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={editValue} setEditValue={setEditValue} handleKeyDown={handleKeyDown} commitEdit={commitEdit} cancelEdit={cancelEdit} startEdit={startEdit}
                       />
-                      {/* Balance â read only (server computed) */}
+                      {/* Balance — read only (server computed) */}
                       <td className="px-3 py-2.5 text-right">
                         <span className={`text-xs font-medium ${(p.balance_qty ?? 0) > 0 ? 'text-amber-600' : 'text-[#4B5563]'}`}>
                           {(p.balance_qty ?? p.qty)?.toLocaleString()}
                         </span>
                       </td>
-                      {/* Unit price â editable */}
+                      {/* Unit price — editable */}
                       <EditableCell
                         id={p.id} field="unit_price" value={p.unit_price} inputType="number"
                         display={<span className="font-mono text-xs text-[#1F2937]">{Number(p.unit_price ?? 0).toFixed(2)}</span>}
-                editingCell={editingCell} saveError={saveError} inputRef={inputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={editValue} setEditValue={setEditValue} handleKeyDown={handleKeyDown} commitEdit={commitEdit} cancelEdit={cancelEdit} startEdit={startEdit}
+                        editingCell={editingCell} saveError={saveError} inputRef={inputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={editValue} setEditValue={setEditValue} handleKeyDown={handleKeyDown} commitEdit={commitEdit} cancelEdit={cancelEdit} startEdit={startEdit}
                       />
-                      {/* Delivery date â editable */}
+                      {/* Delivery date — editable */}
                       <EditableCell
                         id={p.id} field="delivery_date" value={p.delivery_date} inputType="date"
                         display={
                           p.delivery_date
                             ? <span className={`text-xs ${delayed ? 'text-[#C5453F] font-medium' : 'text-[#4B5563]'}`}>{p.delivery_date}</span>
-                            : <span className="text-[#4B5563] text-xs">â</span>
+                            : <span className="text-[#4B5563] text-xs">—</span>
                         }
-                      
-                editingCell={editingCell} saveError={saveError} inputRef={inputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={editValue} setEditValue={setEditValue} handleKeyDown={handleKeyDown} commitEdit={commitEdit} cancelEdit={cancelEdit} startEdit={startEdit}
+                        editingCell={editingCell} saveError={saveError} inputRef={inputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={editValue} setEditValue={setEditValue} handleKeyDown={handleKeyDown} commitEdit={commitEdit} cancelEdit={cancelEdit} startEdit={startEdit}
                       />
-                      {/* Receipt week â read only (derived) */}
+                      {/* Receipt week — read only (derived) */}
                       <td className="px-3 py-2.5 text-right">
-                        <span className="text-xs text-[#4B5563]">{p.receipt_wk || 'â'}</span>
+                        <span className="text-xs text-[#4B5563]">{p.receipt_wk || '—'}</span>
                       </td>
-                      {/* Status â editable */}
+                      {/* Status — editable */}
                       <EditableCell
                         id={p.id} field="status" value={p.status}
                         selectOptions={STATUS_OPTIONS}
@@ -739,8 +957,7 @@ export default function SupplyInputPage() {
                             : 'bg-[#E4DDD3] text-[#4B5563]'
                           }`}>{p.status}</span>
                         }
-                      
-                editingCell={editingCell} saveError={saveError} inputRef={inputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={editValue} setEditValue={setEditValue} handleKeyDown={handleKeyDown} commitEdit={commitEdit} cancelEdit={cancelEdit} startEdit={startEdit}
+                        editingCell={editingCell} saveError={saveError} inputRef={inputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={editValue} setEditValue={setEditValue} handleKeyDown={handleKeyDown} commitEdit={commitEdit} cancelEdit={cancelEdit} startEdit={startEdit}
                       />
                     </tr>
                   )
@@ -754,10 +971,256 @@ export default function SupplyInputPage() {
         )}
 
         <p className="text-[11px] text-[#4B5563] mt-3">
-          Click Supplier, Qty, Shipped, Unit Price, Delivery Date, or Status to edit inline Â· Enter to save Â· Esc to cancel Â·
-          Balance and Receipt Week are recalculated automatically Â· Bulk changes via Upload above
+          Click Supplier, Qty, Shipped, Unit Price, Delivery Date, or Status to edit inline · Enter to save · Esc to cancel ·
+          Balance and Receipt Week are recalculated automatically · Bulk changes via Upload above
         </p>
       </div>
+      </>
+      )}
+
+      {mode === 'COMPONENT' && (
+      <>
+      {/* Component upload section */}
+      <div className="bg-[#DCEAE8] border border-[#DCEAE8] rounded-xl px-4 py-3 mb-4 flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium text-[#0E5C56]">Need the template?</p>
+          <p className="text-xs text-[#0E5C56] mt-0.5">Download and fill in the Component PO Upload Template. Brand is derived automatically from Part Master — no need to fill it in.</p>
+        </div>
+        <a
+          href="/templates/CTG_Component_PO_Upload_Template.xlsx"
+          className="text-xs font-medium text-[#0E5C56] border border-[#0E5C56] px-3 py-1.5 rounded-lg hover:bg-[#DCEAE8] transition-colors flex items-center gap-1.5"
+        >
+          <FileSpreadsheet size={13} /> Download Template
+        </a>
+      </div>
+
+      {componentLastUploaded && (
+        <p className="text-xs text-[#4B5563] mb-3">Last uploaded: {componentLastUploaded}</p>
+      )}
+
+      <div
+        onDragOver={e => { e.preventDefault(); setComponentDragging(true) }}
+        onDragLeave={() => setComponentDragging(false)}
+        onDrop={handleComponentDrop}
+        onClick={() => document.getElementById('component-po-file-input')?.click()}
+        className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer ${
+          componentDragging ? 'border-[#0E5C56] bg-[#DCEAE8]' : 'border-[#E4DDD3] bg-[#F4F2EE] hover:border-[#0E5C56]'
+        }`}
+      >
+        <input id="component-po-file-input" type="file" accept=".xlsx" className="hidden" onChange={handleComponentFileChange} />
+        {componentFile ? (
+          <div>
+            <FileSpreadsheet size={22} className="mx-auto mb-2 text-[#0E5C56]" />
+            <p className="text-sm font-medium text-[#0E5C56]">{componentFile.name}</p>
+            <p className="text-xs text-[#4B5563] mt-1">{(componentFile.size / 1024).toFixed(1)} KB</p>
+          </div>
+        ) : (
+          <div>
+            <Upload size={22} className="mx-auto mb-2 text-[#4B5563]" />
+            <p className="text-sm text-[#4B5563]">Drag & drop your component PO .xlsx file here</p>
+            <p className="text-xs text-[#4B5563] mt-1">or click to browse</p>
+          </div>
+        )}
+      </div>
+
+      <button
+        onClick={handleComponentUpload}
+        disabled={!componentFile || componentLoading}
+        className="mt-4 w-full bg-[#0E5C56] hover:bg-[#0A4A45] disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium py-2.5 rounded-lg transition-colors"
+      >
+        {componentLoading ? 'Uploading...' : 'Upload & Save'}
+      </button>
+
+      {componentError && (
+        <div className="mt-4 bg-[#FAEAEA] border border-[#F5C6C4] rounded-lg px-4 py-3 flex gap-2">
+          <AlertCircle size={16} className="text-[#C5453F] flex-shrink-0 mt-0.5" />
+          <p className="text-sm text-[#C5453F]">{componentError}</p>
+        </div>
+      )}
+
+      {componentResult && (
+        <div className="mt-4 bg-[#DCEAE8] border border-[#DCEAE8] rounded-lg px-4 py-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <CheckCircle size={16} className="text-[#2F9E68]" />
+            <p className="text-sm font-medium text-[#0E5C56]">Upload successful</p>
+          </div>
+          <div className="text-sm text-[#0E5C56] space-y-1">
+            <p>Total rows in file: <span className="font-medium">{componentResult.total_rows}</span></p>
+            <p>Records upserted: <span className="font-medium">{componentResult.upserted}</span></p>
+            {componentResult.skipped > 0 && (
+              <p>Rows skipped (unrecognized part number): <span className="font-medium">{componentResult.skipped}</span></p>
+            )}
+          </div>
+          {componentResult.invalid_part_numbers?.length > 0 && (
+            <div className="mt-2 bg-[#FEF3E2] border border-[#F9DEB8] rounded-md px-3 py-2">
+              <p className="text-xs font-medium text-yellow-800 mb-1">Unrecognized part numbers (not saved — add them in Part Master first):</p>
+              <ul className="text-xs text-[#E8A33D] space-y-0.5">
+                {componentResult.invalid_part_numbers.map(pn => <li key={pn}>• {pn}</li>)}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ───────────── Component PO List ───────────── */}
+      <div className="mt-10">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+          <h2 className="text-sm font-semibold text-[#1F2937]">Current Open Component POs</h2>
+          <button
+            onClick={loadComponentPos}
+            className="inline-flex items-center gap-1.5 text-xs text-[#4B5563] px-3 py-1.5 border border-[#E4DDD3] rounded-lg bg-white hover:bg-[#F4F2EE] transition-colors"
+          >
+            <RefreshCw size={12} /> Refresh
+          </button>
+        </div>
+
+        {/* Summary metrics */}
+        <div className="grid grid-cols-3 gap-3 mb-5">
+          {[
+            { label: 'Total POs', value: componentPos.length, sub: 'all statuses' },
+            { label: 'Open', value: componentOpenCount, sub: 'awaiting receipt' },
+            { label: 'Delayed', value: componentDelayedCount, sub: 'past delivery date, not yet received' },
+          ].map(m => (
+            <div key={m.label} className="bg-[#F4F2EE] rounded-lg px-4 py-3">
+              <p className="text-[10px] font-medium text-[#4B5563] uppercase tracking-wide mb-1">{m.label}</p>
+              <p className={`text-xl font-semibold ${m.label === 'Delayed' && m.value > 0 ? 'text-[#C5453F]' : 'text-[#1F2937]'}`}>{m.value}</p>
+              <p className="text-[11px] text-[#4B5563] mt-0.5">{m.sub}</p>
+            </div>
+          ))}
+        </div>
+
+        {componentSaveError && (
+          <div className="flex items-center justify-between mb-3 px-4 py-2.5 bg-[#FAEAEA] border border-[#F5C6C4] rounded-lg text-xs text-[#C5453F]">
+            <span>Failed to save PO #{componentSaveError.id}: {componentSaveError.msg}</span>
+            <button onClick={() => setComponentSaveError(null)}><X size={12} /></button>
+          </div>
+        )}
+
+        {/* Filter bar */}
+        <div className="flex items-center gap-2 mb-3">
+          <div className="relative flex-1">
+            <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#4B5563] pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Search PO number, part number, or supplier..."
+              value={componentSearch}
+              onChange={e => setComponentSearch(e.target.value)}
+              className="w-full pl-7 pr-3 py-1.5 text-xs border border-[#E4DDD3] rounded-lg bg-white focus:outline-none focus:border-[#0E5C56]"
+            />
+          </div>
+          <select value={componentStatusFilter} onChange={e => setComponentStatusFilter(e.target.value)} className="text-xs px-2 py-1.5 border border-[#E4DDD3] rounded-lg bg-white text-[#4B5563] focus:outline-none focus:border-[#0E5C56]">
+            {statuses.map(s => <option key={s}>{s}</option>)}
+          </select>
+          <span className="text-xs text-[#4B5563] whitespace-nowrap">{componentFiltered.length} POs</span>
+        </div>
+
+        {componentListError ? (
+          <div className="text-sm text-[#C5453F] bg-[#FAEAEA] border border-[#F5C6C4] rounded-lg px-4 py-3">{componentListError}</div>
+        ) : componentListLoading ? (
+          <div className="text-sm text-[#4B5563] text-center py-16">Loading...</div>
+        ) : (
+          <div className="border border-[#E4DDD3] rounded-xl overflow-x-auto">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="bg-[#F4F2EE] border-b border-[#E4DDD3]">
+                  {['PO Number', 'Part Number', 'Supplier', 'Qty', 'Shipped', 'Balance', 'Unit Price', 'Delivery Date', 'Receipt Wk', 'Status'].map((h, i) => (
+                    <th key={h} className={`px-3 py-2.5 font-medium text-[#4B5563] uppercase tracking-wide text-[10px] whitespace-nowrap ${i < 3 ? 'text-left' : 'text-right'}`}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {componentFiltered.map(p => {
+                  const delayed = isDelayed(p)
+                  return (
+                    <tr key={p.id} className={`border-b border-[#E4DDD3] last:border-0 transition-colors ${delayed ? 'bg-[#FAEAEA]/40' : ''}`}>
+                      {/* PO Number — read only */}
+                      <td className="px-3 py-2.5">
+                        <span className="font-mono text-[11px] text-[#1F2937]">{p.po_number}</span>
+                        {delayed && (
+                          <span className="ml-2 inline-block text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-[#FAEAEA] text-[#C5453F] align-middle">Delayed</span>
+                        )}
+                      </td>
+                      {/* Part Number — read only */}
+                      <td className="px-3 py-2.5">
+                        <span className="font-mono text-[11px] text-[#1F2937]">{p.part_number}</span>
+                        {p.brand && <p className="text-[10px] text-[#4B5563] mt-0.5">{p.brand}</p>}
+                      </td>
+                      {/* Supplier — editable */}
+                      <EditableCell
+                        id={p.id} field="supplier_name" value={p.supplier_name} align="left"
+                        display={<span className="text-xs text-[#4B5563]">{p.supplier_name || '—'}</span>}
+                        editingCell={componentEditingCell} saveError={componentSaveError} inputRef={componentInputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={componentEditValue} setEditValue={setComponentEditValue} handleKeyDown={handleComponentKeyDown} commitEdit={commitComponentEdit} cancelEdit={cancelComponentEdit} startEdit={startComponentEdit}
+                      />
+                      {/* Qty — editable */}
+                      <EditableCell
+                        id={p.id} field="qty" value={p.qty} inputType="number"
+                        display={<span className="text-xs text-[#1F2937]">{p.qty?.toLocaleString()}</span>}
+                        editingCell={componentEditingCell} saveError={componentSaveError} inputRef={componentInputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={componentEditValue} setEditValue={setComponentEditValue} handleKeyDown={handleComponentKeyDown} commitEdit={commitComponentEdit} cancelEdit={cancelComponentEdit} startEdit={startComponentEdit}
+                      />
+                      {/* Qty Shipped — editable */}
+                      <EditableCell
+                        id={p.id} field="qty_shipped" value={p.qty_shipped} inputType="number"
+                        display={<span className="text-xs text-[#4B5563]">{(p.qty_shipped ?? 0).toLocaleString()}</span>}
+                        editingCell={componentEditingCell} saveError={componentSaveError} inputRef={componentInputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={componentEditValue} setEditValue={setComponentEditValue} handleKeyDown={handleComponentKeyDown} commitEdit={commitComponentEdit} cancelEdit={cancelComponentEdit} startEdit={startComponentEdit}
+                      />
+                      {/* Balance — read only (server computed) */}
+                      <td className="px-3 py-2.5 text-right">
+                        <span className={`text-xs font-medium ${(p.balance_qty ?? 0) > 0 ? 'text-amber-600' : 'text-[#4B5563]'}`}>
+                          {(p.balance_qty ?? p.qty)?.toLocaleString()}
+                        </span>
+                      </td>
+                      {/* Unit price — editable */}
+                      <EditableCell
+                        id={p.id} field="unit_price" value={p.unit_price} inputType="number"
+                        display={<span className="font-mono text-xs text-[#1F2937]">{Number(p.unit_price ?? 0).toFixed(2)}</span>}
+                        editingCell={componentEditingCell} saveError={componentSaveError} inputRef={componentInputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={componentEditValue} setEditValue={setComponentEditValue} handleKeyDown={handleComponentKeyDown} commitEdit={commitComponentEdit} cancelEdit={cancelComponentEdit} startEdit={startComponentEdit}
+                      />
+                      {/* Delivery date — editable */}
+                      <EditableCell
+                        id={p.id} field="delivery_date" value={p.delivery_date} inputType="date"
+                        display={
+                          p.delivery_date
+                            ? <span className={`text-xs ${delayed ? 'text-[#C5453F] font-medium' : 'text-[#4B5563]'}`}>{p.delivery_date}</span>
+                            : <span className="text-[#4B5563] text-xs">—</span>
+                        }
+                        editingCell={componentEditingCell} saveError={componentSaveError} inputRef={componentInputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={componentEditValue} setEditValue={setComponentEditValue} handleKeyDown={handleComponentKeyDown} commitEdit={commitComponentEdit} cancelEdit={cancelComponentEdit} startEdit={startComponentEdit}
+                      />
+                      {/* Receipt week — read only (derived) */}
+                      <td className="px-3 py-2.5 text-right">
+                        <span className="text-xs text-[#4B5563]">{p.receipt_wk || '—'}</span>
+                      </td>
+                      {/* Status — editable */}
+                      <EditableCell
+                        id={p.id} field="status" value={p.status}
+                        selectOptions={STATUS_OPTIONS}
+                        display={
+                          <span className={`inline-block text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                            p.status === 'Open' ? 'bg-[#FEF3E2] text-[#E8A33D]'
+                            : p.status === 'Received' ? 'bg-[#DCEAE8] text-[#0E5C56]'
+                            : 'bg-[#E4DDD3] text-[#4B5563]'
+                          }`}>{p.status}</span>
+                        }
+                        editingCell={componentEditingCell} saveError={componentSaveError} inputRef={componentInputRef as React.RefObject<HTMLInputElement | HTMLSelectElement>} editValue={componentEditValue} setEditValue={setComponentEditValue} handleKeyDown={handleComponentKeyDown} commitEdit={commitComponentEdit} cancelEdit={cancelComponentEdit} startEdit={startComponentEdit}
+                      />
+                    </tr>
+                  )
+                })}
+                {componentFiltered.length === 0 && (
+                  <tr><td colSpan={10} className="px-4 py-12 text-center text-xs text-[#4B5563]">No component POs match your filters</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <p className="text-[11px] text-[#4B5563] mt-3">
+          Click Supplier, Qty, Shipped, Unit Price, Delivery Date, or Status to edit inline · Enter to save · Esc to cancel ·
+          Balance and Receipt Week are recalculated automatically · Bulk changes via Upload above ·
+          No Google Sheet sync yet for components — bulk upload and inline edit only.
+        </p>
+      </div>
+      </>
+      )}
     </div>
   )
 }
