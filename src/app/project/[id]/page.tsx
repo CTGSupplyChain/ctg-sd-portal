@@ -49,6 +49,9 @@ export default function ProjectPage() {
   const [selectedSku, setSelectedSku] = useState<string>('')
   const [mrpResults, setMrpResults] = useState<ComponentMrpResult[]>([])
   const [fgPartNumber, setFgPartNumber] = useState<string>('')
+  const [bomFgParts, setBomFgParts] = useState<any[]>([])
+  const [bomLinesAll, setBomLinesAll] = useState<any[]>([])
+  const [bomComponents, setBomComponents] = useState<ComponentMaster[]>([])
 
   useEffect(() => {
     sessionStorage.setItem('ctg_last_brand', brand)
@@ -143,7 +146,7 @@ export default function ProjectPage() {
       const uncommits: Record<string, number> = {}
       const wkLabels = new Set(wkList.map(w => w.label))
       skuSupply.forEach((s: any) => {
-        const wk = (s.receipt_wk && wkLabels.has(s.receipt_wk)) ? s.receipt_wk : CURRENT_WK
+        const wk = (s.receipt_wk && wkLabels.has(s.receipt_wk)) ? s.receipt_wk : CURRENT_WK,
         if (s.commit_status === 'Commit') commits[wk] = (commits[wk] || 0) + s.qty
         else uncommits[wk] = (uncommits[wk] || 0) + s.qty
       })
@@ -166,7 +169,7 @@ export default function ProjectPage() {
     setSkuResults(results)
     if (results.length > 0) setSelectedSku(results[0].sku.sku)
 
-    // ── BOM MRP ───────────────────────────────────────────────────────────────
+    // ── BOM MRP raw data (recomputed per selected SKU in a separate effect below) ──
     if (allProjectIds.length > 0) {
       const { data: fgParts } = await supabase
         .from('parts')
@@ -174,97 +177,106 @@ export default function ProjectPage() {
         .in('project_id', allProjectIds)
         .eq('category', 'FG')
 
-      // Pick the FG part whose master_sku_ref matches the currently selected SKU, else first FG with a ref
-      const fgPart = (fgParts || []).find((p: any) => p.master_sku_ref === results[0]?.sku.sku)
-        ?? (fgParts || []).find((p: any) => p.master_sku_ref != null)
-        ?? fgParts?.[0]
-      if (fgPart) {
-        setFgPartNumber(fgPart.part_number)
+      const { data: bomData } = await supabase
+        .from('bom_lines')
+        .select('id, parent_pn, child_pn, bom_level, qty_per, uom, child:parts!bom_lines_child_pn_fkey(part_number, description, category, uom, on_hand_qty)')
+        .eq('is_active', true)
 
-        const { data: bomData } = await supabase
-          .from('bom_lines')
-          .select('id, parent_pn, child_pn, bom_level, qty_per, uom, child:parts!bom_lines_child_pn_fkey(part_number, description, category, uom, on_hand_qty)')
-          .eq('is_active', true)
+      const { data: projectParts } = await supabase
+        .from('parts').select('part_number').in('project_id', allProjectIds)
 
-        const { data: projectParts } = await supabase
-          .from('parts').select('part_number').in('project_id', allProjectIds)
+      const projectPns = new Set(projectParts?.map((p: any) => p.part_number) || [])
+      ;(fgParts || []).forEach((p: any) => projectPns.add(p.part_number))
 
-        const projectPns = new Set(projectParts?.map((p: any) => p.part_number) || [])
-        projectPns.add(fgPart.part_number)
+      const bomLines = (bomData || [])
+        .filter((bl: any) => projectPns.has(bl.parent_pn) || projectPns.has(bl.child_pn))
+        .map((bl: any) => ({
+          partNumber: bl.child_pn,
+          parentPn: bl.parent_pn,
+          description: bl.child?.description || bl.child_pn,
+          category: bl.child?.category || 'RM',
+          bomLevel: bl.bom_level,
+          qtyPer: parseFloat(bl.qty_per),
+          uom: bl.uom,
+        }))
 
-        const bomLines = (bomData || [])
-          .filter((bl: any) => projectPns.has(bl.parent_pn) || projectPns.has(bl.child_pn))
-          .map((bl: any) => ({
-            partNumber: bl.child_pn,
-            parentPn: bl.parent_pn,
-            description: bl.child?.description || bl.child_pn,
-            category: bl.child?.category || 'RM',
-            bomLevel: bl.bom_level,
-            qtyPer: parseFloat(bl.qty_per),
-            uom: bl.uom,
-          }))
+      const compPns = [...new Set(bomLines.map((b: any) => b.partNumber as string))]
 
-        const compPns = [...new Set(bomLines.map((b: any) => b.partNumber as string))]
+      const { data: psData } = compPns.length > 0
+        ? await supabase.from('part_supplier')
+            .select('part_number, moq, spq, lead_time_wk, supplier_id')
+            .in('part_number', compPns).eq('is_preferred', true)
+        : { data: [] }
 
-        const { data: psData } = compPns.length > 0
-          ? await supabase.from('part_supplier')
-              .select('part_number, moq, spq, lead_time_wk, supplier_id')
-              .in('part_number', compPns).eq('is_preferred', true)
-          : { data: [] }
+      const supIds = [...new Set((psData || []).map((ps: any) => ps.supplier_id).filter(Boolean))]
+      const { data: supData } = supIds.length > 0
+        ? await supabase.from('plm_suppliers').select('id, name').in('id', supIds)
+        : { data: [] }
 
-        const supIds = [...new Set((psData || []).map((ps: any) => ps.supplier_id).filter(Boolean))]
-        const { data: supData } = supIds.length > 0
-          ? await supabase.from('plm_suppliers').select('id, name').in('id', supIds)
-          : { data: [] }
+      const supNameMap = new Map((supData || []).map((s: any) => [s.id, s.name]))
+      const psMap = new Map((psData || []).map((ps: any) => [ps.part_number, ps]))
 
-        const supNameMap = new Map((supData || []).map((s: any) => [s.id, s.name]))
-        const psMap = new Map((psData || []).map((ps: any) => [ps.part_number, ps]))
+      const { data: partsData } = compPns.length > 0
+        ? await supabase.from('parts')
+            .select('part_number, description, category, uom, on_hand_qty')
+            .in('part_number', compPns)
+        : { data: [] }
 
-        const { data: partsData } = compPns.length > 0
-          ? await supabase.from('parts')
-              .select('part_number, description, category, uom, on_hand_qty')
-              .in('part_number', compPns)
-          : { data: [] }
-
-        const components: ComponentMaster[] = (partsData || []).map((p: any) => {
-          const ps = psMap.get(p.part_number)
-          return {
-            partNumber: p.part_number,
-            description: p.description,
-            category: p.category,
-            uom: p.uom,
-            onHandQty: p.on_hand_qty ?? 0,
-            supplier: ps?.supplier_id ? supNameMap.get(ps.supplier_id) ?? null : null,
-            moq: ps?.moq ?? null,
-            spq: ps?.spq ?? null,
-            leadTimeWk: ps?.lead_time_wk ?? null,
-          }
-        })
-
-        const fgSkuResult = results.find(r => r.sku.sku === fgPart.master_sku_ref) || results[0]
-        const fgDemandMap = new Map<string, number>()
-        if (fgSkuResult) {
-          fgSkuResult.weeks.forEach(w => fgDemandMap.set(w.wkLabel, w.forecastQty))
+      const components: ComponentMaster[] = (partsData || []).map((p: any) => {
+        const ps = psMap.get(p.part_number)
+        return {
+          partNumber: p.part_number,
+          description: p.description,
+          category: p.category,
+          uom: p.uom,
+          onHandQty: p.on_hand_qty ?? 0,
+          supplier: ps?.supplier_id ? supNameMap.get(ps.supplier_id) ?? null : null,
+          moq: ps?.moq ?? null,
+          spq: ps?.spq ?? null,
+          leadTimeWk: ps?.lead_time_wk ?? null,
         }
+      })
 
-        console.log('[MRP debug] fgPart:', fgPart?.part_number, 'bomLines:', bomLines.length, 'components:', components.length, 'compPns:', compPns)
-
-        if (bomLines.length > 0 && components.length > 0) {
-          const mrp = computeMRP({
-            fgPartNumber: fgPart.part_number,
-            bomLines,
-            components,
-            fgWeeklyDemand: fgDemandMap,
-            weeks: wkList,
-            currentWkLabel: CURRENT_WK,
-          })
-          setMrpResults(mrp)
-        }
-      }
+      setBomFgParts(fgParts || [])
+      setBomLinesAll(bomLines)
+      setBomComponents(components)
     }
 
     setLoading(false)
   }
+
+  // Recompute BOM/MRP explosion whenever the selected SKU changes (or the
+  // underlying raw BOM data finishes loading). Previously this only ran once
+  // on initial load, keyed off the first SKU in the list — so the "BOM
+  // Component Orders" widget showed stale components/qty for every other SKU.
+  useEffect(() => {
+    if (!selectedSku || weeks.length === 0 || bomFgParts.length === 0 || bomLinesAll.length === 0 || bomComponents.length === 0) return
+
+    const fgPart = bomFgParts.find((p: any) => p.master_sku_ref === selectedSku)
+      ?? bomFgParts.find((p: any) => p.master_sku_ref != null)
+      ?? bomFgParts[0]
+    if (!fgPart) return
+
+    setFgPartNumber(fgPart.part_number)
+
+    const fgSkuResult = skuResults.find(r => r.sku.sku === fgPart.master_sku_ref)
+      ?? skuResults.find(r => r.sku.sku === selectedSku)
+      ?? skuResults[0]
+    const fgDemandMap = new Map<string, number>()
+    if (fgSkuResult) {
+      fgSkuResult.weeks.forEach(w => fgDemandMap.set(w.wkLabel, w.forecastQty))
+    }
+
+    const mrp = computeMRP({
+      fgPartNumber: fgPart.part_number,
+      bomLines: bomLinesAll,
+      components: bomComponents,
+      fgWeeklyDemand: fgDemandMap,
+      weeks,
+      currentWkLabel: CURRENT_WK,
+    })
+    setMrpResults(mrp)
+  }, [selectedSku, bomFgParts, bomLinesAll, bomComponents, weeks, skuResults])
 
   const currentSkuResult = skuResults.find(s => s.sku.sku === selectedSku) || skuResults[0]
   const flag = currentSkuResult ? FLAG_DISPLAY[currentSkuResult.flag] : null
