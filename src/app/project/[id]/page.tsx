@@ -146,7 +146,7 @@ export default function ProjectPage() {
       const uncommits: Record<string, number> = {}
       const wkLabels = new Set(wkList.map(w => w.label))
       skuSupply.forEach((s: any) => {
-        const wk = (s.receipt_wk && wkLabels.has(s.receipt_wk)) ? s.receipt_wk : CURRENT_WK,
+        const wk = (s.receipt_wk && wkLabels.has(s.receipt_wk)) ? s.receipt_wk : CURRENT_WK
         if (s.commit_status === 'Commit') commits[wk] = (commits[wk] || 0) + s.qty
         else uncommits[wk] = (uncommits[wk] || 0) + s.qty
       })
