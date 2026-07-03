@@ -32,14 +32,20 @@ function fmt(n: number): string {
   return n.toLocaleString()
 }
 
+function fmtBalance(n: number): string {
+  if (n === 0) return '0'
+  if (n < 0) return `(${Math.abs(n).toLocaleString()})`
+  return n.toLocaleString()
+}
+
 // Row styles matching SDTable
-type MrpRowType = 'gross' | 'net' | 'po' | 'release'
+type MrpRowType = 'gross' | 'net' | 'po' | 'balance'
 
 const ROW_META: Record<MrpRowType, { bg: string; labelColor: string; cellColor: string }> = {
   gross:   { bg: 'bg-[#DCEAE8]', labelColor: 'text-[#4B5563]', cellColor: 'text-[#1F2937]' },
   net:     { bg: 'bg-[#F4F2EE]', labelColor: 'text-[#4B5563]', cellColor: 'text-[#1F2937]' },
   po:      { bg: 'bg-[#E4DDD3]', labelColor: 'text-[#4B5563]', cellColor: 'text-[#1F2937] font-medium' },
-  release: { bg: 'bg-[#1F2937]', labelColor: 'text-[#E4DDD3]', cellColor: 'text-white font-semibold' },
+  balance: { bg: 'bg-[#1F2937]', labelColor: 'text-[#E4DDD3]', cellColor: 'text-white font-semibold' },
 }
 
 export default function ComponentSD({ results, weeks, currentWk, fgSku, fgDescription }: ComponentSDProps) {
@@ -128,7 +134,7 @@ export default function ComponentSD({ results, weeks, currentWk, fgSku, fgDescri
           <span><strong>Gross Req</strong> = FG demand × qty/FG</span>
           <span><strong>Net Req</strong> = Gross − on-hand (rolling)</span>
           <span><strong>Planned PO</strong> = Net req rounded to MOQ</span>
-          <span className="ml-auto"><strong>PO Release</strong> = demand week − lead time</span>
+          <span className="ml-auto"><strong>Balance</strong> = on-hand − demand + supply (commit)</span>
         </div>
       )}
     </div>
@@ -247,16 +253,13 @@ function ComponentTable({
                 weeks={weeks}
                 currentWk={currentWk}
               />
-              {/* PO Release week — dark row like Balance */}
+              {/* Balance — running S&D balance: on-hand − demand + supply (commit) */}
               <MrpRow
-                label="PO Release"
-                rowType="release"
-                values={result.weeks.map(w => w.plannedOrderQty > 0 ? 1 : 0)}
-                releaseWks={result.weeks.map(w => w.poReleaseWk)}
-                flags={result.weeks.map(w => w.poReleaseFlag)}
+                label="Balance"
+                rowType="balance"
+                values={result.weeks.map(w => w.balance)}
                 weeks={weeks}
                 currentWk={currentWk}
-                missingLt={missingLt}
               />
             </tbody>
           </table>
@@ -269,16 +272,14 @@ function ComponentTable({
 // ── Individual row ────────────────────────────────────────────────────────────
 
 function MrpRow({
-  label, rowType, values, flags, releaseWks, weeks, currentWk, missingLt,
+  label, rowType, values, flags, weeks, currentWk,
 }: {
   label: string
   rowType: MrpRowType
   values: number[]
   flags?: (string | null)[]
-  releaseWks?: (string | null)[]
   weeks: WeekInfo[]
   currentWk: string
-  missingLt?: boolean
 }) {
   const meta = ROW_META[rowType]
 
@@ -293,35 +294,23 @@ function MrpRow({
       {weeks.map((w, i) => {
         const val = values[i] ?? 0
         const flag = flags?.[i] ?? null
-        const releaseWk = releaseWks?.[i] ?? null
         const isCurrent = w.label === currentWk
 
-        // PO Release row: show the release week label in the cell where PO must be placed
-        if (rowType === 'release') {
-          const hasOrder = val > 0
-          const cellBg = isCurrent ? 'bg-[#2E3D50]' : meta.bg
-          const flagStyle = flag ? FLAG_BADGE[flag] : null
+        // Balance row: running S&D balance (on-hand − demand + supply commit)
+        if (rowType === 'balance') {
+          const isNeg = val < 0
+          const cellBg = isCurrent ? 'bg-[#0E5C56]' : meta.bg
 
           return (
             <td
               key={w.label}
               className={clsx(
-                'text-center px-1 py-1.5 border-b border-r border-[#EAECF0] text-[10px] tabular-nums',
-                cellBg
+                'text-center px-1.5 py-1.5 border-b border-r border-[#EAECF0] text-xs tabular-nums font-semibold',
+                cellBg,
+                isNeg ? 'text-[#F87171]' : 'text-white'
               )}
             >
-              {missingLt ? (
-                <span className="text-[#667085]">—</span>
-              ) : hasOrder && releaseWk ? (
-                <span className={clsx(
-                  'inline-block px-1.5 py-0.5 rounded text-[9px] font-semibold',
-                  flagStyle ? `${flagStyle.bg} ${flagStyle.text}` : 'bg-green-100 text-green-800'
-                )}>
-                  {releaseWk}
-                </span>
-              ) : (
-                <span className="text-[#4B5E78]">—</span>
-              )}
+              {fmtBalance(val)}
             </td>
           )
         }
