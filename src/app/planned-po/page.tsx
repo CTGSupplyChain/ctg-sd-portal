@@ -69,6 +69,7 @@ export default function PlannedPoPage() {
   const [loading, setLoading] = useState(true)
   const [filterFlag, setFilterFlag] = useState<'ALL' | 'RELEASE_PO' | 'PLAN_PO'>('ALL')
   const [filterLevel, setFilterLevel] = useState<'ALL' | 'FG' | 'COMPONENT'>('ALL')
+  const [filterBrand, setFilterBrand] = useState('All')
   const [snapshotDate, setSnapshotDate] = useState('')
 
   useEffect(() => { loadAll() }, [])
@@ -481,12 +482,14 @@ export default function PlannedPoPage() {
 
   // ── render ────────────────────────────────────────────────────────────────────
 
-  const levelFiltered = filterLevel === 'ALL' ? rows : filterLevel === 'FG' ? rows.filter(r => r.level === 'FG') : rows.filter(r => r.level !== 'FG')
+  const brandOptions = ['All', ...brands]
+  const brandFilteredRows = filterBrand === 'All' ? rows : rows.filter(r => r.brand === filterBrand)
+  const levelFiltered = filterLevel === 'ALL' ? brandFilteredRows : filterLevel === 'FG' ? brandFilteredRows.filter(r => r.level === 'FG') : brandFilteredRows.filter(r => r.level !== 'FG')
   const visibleRows = filterFlag === 'ALL' ? levelFiltered : levelFiltered.filter(r => r.bucket === filterFlag)
   const releaseCount = levelFiltered.filter(r => r.bucket === 'RELEASE_PO').length
   const planCount = levelFiltered.filter(r => r.bucket === 'PLAN_PO').length
-  const fgCount = rows.filter(r => r.level === 'FG').length
-  const componentCount = rows.filter(r => r.level !== 'FG').length
+  const fgCount = brandFilteredRows.filter(r => r.level === 'FG').length
+  const componentCount = brandFilteredRows.filter(r => r.level !== 'FG').length
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: '#F4F2EE' }}>
@@ -572,6 +575,13 @@ export default function PlannedPoPage() {
                   ))}
                 </div>
                 <div className="flex items-center gap-2">
+                  <select
+                    value={filterBrand}
+                    onChange={e => setFilterBrand(e.target.value)}
+                    className="text-xs px-3 py-1.5 border border-[#E4DDD3] rounded-lg bg-white text-[#4B5563] focus:outline-none focus:border-[#0E5C56]"
+                  >
+                    {brandOptions.map(b => <option key={b} value={b}>{b === 'All' ? 'All Brands' : b}</option>)}
+                  </select>
                   {(['ALL', 'FG', 'COMPONENT'] as const).map(f => (
                     <button
                       key={f}
