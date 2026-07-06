@@ -62,6 +62,7 @@ interface PurchaseOrder {
   po_number: string
   sku: string
   brand: string | null
+  company: string | null
   supplier_name: string | null
   qty: number
   qty_shipped: number | null
@@ -80,6 +81,7 @@ interface ComponentPurchaseOrder {
   po_number: string
   part_number: string
   brand: string | null
+  company: string | null
   supplier_name: string | null
   qty: number
   qty_shipped: number | null
@@ -193,6 +195,7 @@ export default function SupplyInputPage() {
   const [listError, setListError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('All')
+  const [companyFilter, setCompanyFilter] = useState('All')
 
   // FG inline edit state
   const [editingCell, setEditingCell] = useState<EditingCell>(null)
@@ -223,6 +226,7 @@ export default function SupplyInputPage() {
   const [componentListError, setComponentListError] = useState<string | null>(null)
   const [componentSearch, setComponentSearch] = useState('')
   const [componentStatusFilter, setComponentStatusFilter] = useState('All')
+  const [componentCompanyFilter, setComponentCompanyFilter] = useState('All')
 
   // Component inline edit state
   const [componentEditingCell, setComponentEditingCell] = useState<EditingCell>(null)
@@ -250,7 +254,7 @@ export default function SupplyInputPage() {
     setListLoading(true); setListError(null)
     const { data, error: err } = await supabase
       .from('purchase_orders')
-      .select('id, po_number, sku, brand, supplier_name, qty, qty_shipped, balance_qty, unit_price, delivery_date, receipt_wk, status, commit_status, notes, updated_at')
+      .select('id, po_number, sku, brand, company, supplier_name, qty, qty_shipped, balance_qty, unit_price, delivery_date, receipt_wk, status, commit_status, notes, updated_at')
       .not('sku', 'is', null)
       .order('updated_at', { ascending: false })
       .limit(1000)
@@ -263,7 +267,7 @@ export default function SupplyInputPage() {
     setComponentListLoading(true); setComponentListError(null)
     const { data, error: err } = await supabase
       .from('purchase_orders')
-      .select('id, po_number, part_number, brand, supplier_name, qty, qty_shipped, balance_qty, unit_price, delivery_date, receipt_wk, status, commit_status, notes, updated_at')
+      .select('id, po_number, part_number, brand, company, supplier_name, qty, qty_shipped, balance_qty, unit_price, delivery_date, receipt_wk, status, commit_status, notes, updated_at')
       .not('part_number', 'is', null)
       .order('updated_at', { ascending: false })
       .limit(1000)
@@ -552,13 +556,19 @@ export default function SupplyInputPage() {
 
   const statuses = ['All', ...STATUS_OPTIONS]
 
+  const companies = useMemo(() => {
+    const set = new Set(pos.map(p => p.company).filter((c): c is string => !!c))
+    return ['All', ...Array.from(set).sort()]
+  }, [pos])
+
   const filtered = useMemo(() => pos.filter(p => {
     const q = search.toLowerCase()
     return (
       (!search || p.po_number.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || (p.supplier_name ?? '').toLowerCase().includes(q)) &&
-      (statusFilter === 'All' || p.status === statusFilter)
+      (statusFilter === 'All' || p.status === statusFilter) &&
+      (companyFilter === 'All' || p.company === companyFilter)
     )
-  }), [pos, search, statusFilter])
+  }), [pos, search, statusFilter, companyFilter])
 
   const openCount = pos.filter(p => p.status === 'Open').length
   const delayedCount = useMemo(() => {
@@ -571,13 +581,19 @@ export default function SupplyInputPage() {
     return p.status === 'Open' && !!p.delivery_date && p.delivery_date < today && (p.balance_qty ?? p.qty) > 0
   }
 
+  const componentCompanies = useMemo(() => {
+    const set = new Set(componentPos.map(p => p.company).filter((c): c is string => !!c))
+    return ['All', ...Array.from(set).sort()]
+  }, [componentPos])
+
   const componentFiltered = useMemo(() => componentPos.filter(p => {
     const q = componentSearch.toLowerCase()
     return (
       (!componentSearch || p.po_number.toLowerCase().includes(q) || p.part_number.toLowerCase().includes(q) || (p.supplier_name ?? '').toLowerCase().includes(q)) &&
-      (componentStatusFilter === 'All' || p.status === componentStatusFilter)
+      (componentStatusFilter === 'All' || p.status === componentStatusFilter) &&
+      (componentCompanyFilter === 'All' || p.company === componentCompanyFilter)
     )
-  }), [componentPos, componentSearch, componentStatusFilter])
+  }), [componentPos, componentSearch, componentStatusFilter, componentCompanyFilter])
 
   const componentOpenCount = componentPos.filter(p => p.status === 'Open').length
   const componentDelayedCount = useMemo(() => {
@@ -868,6 +884,9 @@ export default function SupplyInputPage() {
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="text-xs px-2 py-1.5 border border-[#E4DDD3] rounded-lg bg-white text-[#4B5563] focus:outline-none focus:border-[#0E5C56]">
             {statuses.map(s => <option key={s}>{s}</option>)}
           </select>
+          <select value={companyFilter} onChange={e => setCompanyFilter(e.target.value)} className="text-xs px-2 py-1.5 border border-[#E4DDD3] rounded-lg bg-white text-[#4B5563] focus:outline-none focus:border-[#0E5C56]">
+            {companies.map(c => <option key={c}>{c}</option>)}
+          </select>
           <span className="text-xs text-[#4B5563] whitespace-nowrap">{filtered.length} POs</span>
         </div>
 
@@ -1110,6 +1129,9 @@ export default function SupplyInputPage() {
           </div>
           <select value={componentStatusFilter} onChange={e => setComponentStatusFilter(e.target.value)} className="text-xs px-2 py-1.5 border border-[#E4DDD3] rounded-lg bg-white text-[#4B5563] focus:outline-none focus:border-[#0E5C56]">
             {statuses.map(s => <option key={s}>{s}</option>)}
+          </select>
+          <select value={componentCompanyFilter} onChange={e => setComponentCompanyFilter(e.target.value)} className="text-xs px-2 py-1.5 border border-[#E4DDD3] rounded-lg bg-white text-[#4B5563] focus:outline-none focus:border-[#0E5C56]">
+            {componentCompanies.map(c => <option key={c}>{c}</option>)}
           </select>
           <span className="text-xs text-[#4B5563] whitespace-nowrap">{componentFiltered.length} POs</span>
         </div>
