@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { generateAttachRateForecast } from '@/lib/attach-rate-forecast'
 
 function getSupabase() {
   return createClient(
@@ -16,6 +17,7 @@ const MONTH_COL_MAP: Record<string, string> = {
   "Jul'26": 'jul_26', "Aug'26": 'aug_26', "Sep'26": 'sep_26',
   "Oct'26": 'oct_26', "Nov'26": 'nov_26', "Dec'26": 'dec_26',
   "Jan'27": 'jan_27', "Feb'27": 'feb_27', "Mar'27": 'mar_27',
+  "Apr'27": 'apr_27', "May'27": 'may_27', "Jun'27": 'jun_27',
 }
 
 // Get Google OAuth2 access token using service account JWT
@@ -189,7 +191,14 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    return NextResponse.json({ success: true, results })
+    // Attach-rate brands: re-explode latest RM forecast -> weekly SKU demand
+    const { data: arBrands } = await getSupabase().from('brand_planning_config').select('brand')
+    const attachRate: Record<string, unknown> = {}
+    for (const b of arBrands || []) {
+      attachRate[b.brand] = await generateAttachRateForecast(getSupabase(), b.brand)
+    }
+
+    return NextResponse.json({ success: true, results, attachRate })
 
   } catch (err: any) {
     console.error('Forecast sync error:', err)

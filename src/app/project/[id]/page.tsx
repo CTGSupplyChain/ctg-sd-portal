@@ -90,14 +90,27 @@ export default function ProjectPage() {
 
     const { data: skuData } = await supabase.from('master_sku').select('*').eq('brand', brand).eq('status', 'Active')
 
+    // WMS variants (e.g. iLady Box SKUs) consolidate into their master SKU
+    const masterSkus: string[] = skuData?.map((s: any) => s.sku) || []
+    const { data: mapRows } = await supabase
+      .from('sku_wms_mapping').select('wms_sku, master_sku').in('master_sku', masterSkus)
+    const wmsToMaster = new Map<string, string>((mapRows || []).map((m: any) => [m.wms_sku, m.master_sku]))
+    const stockSkus = [...new Set([...masterSkus, ...Array.from(wmsToMaster.keys())])]
+
     const { data: stockData } = await supabase
       .from('wms_inventory_snapshots').select('sku, atp, snapshot_date')
-      .in('sku', skuData?.map((s: any) => s.sku) || []).order('snapshot_date', { ascending: false })
+      .in('sku', stockSkus).order('snapshot_date', { ascending: false })
 
     const latestStock: Record<string, number> = {}
     const stockDates: string[] = []
+    // Latest snapshot per WMS sku, then sum mapped variants into the master SKU
+    const latestByWms: Record<string, number> = {}
     stockData?.forEach((s: any) => {
-      if (!latestStock[s.sku]) { latestStock[s.sku] = s.atp; stockDates.push(s.snapshot_date) }
+      if (latestByWms[s.sku] === undefined) { latestByWms[s.sku] = s.atp; stockDates.push(s.snapshot_date) }
+    })
+    Object.entries(latestByWms).forEach(([wsku, atp]) => {
+      const master = wmsToMaster.get(wsku) ?? wsku
+      latestStock[master] = (latestStock[master] || 0) + (atp || 0)
     })
     if (stockDates[0]) setLastUpdated(stockDates[0])
 
@@ -142,6 +155,7 @@ export default function ProjectPage() {
         moq: skuRaw.moq, uom: skuRaw.uom, leadTimeWk: skuRaw.lead_time_wk,
         avgSellingPrice: skuRaw.avg_selling_price, safetyStock: skuRaw.safety_stock,
         bufferStock: skuRaw.buffer_stock, status: skuRaw.status,
+        demandSource: skuRaw.demand_source,
       }
       const skuSupply = supplyData?.filter((s: any) => s.sku === skuRaw.sku) || []
       const commits: Record<string, number> = {}

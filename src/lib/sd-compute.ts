@@ -13,6 +13,7 @@ export const MONTHLY_FORECAST_COLS: Record<string, [number, number]> = {
   'jul_26': [2026, 7], 'aug_26': [2026, 8], 'sep_26': [2026, 9],
   'oct_26': [2026, 10], 'nov_26': [2026, 11], 'dec_26': [2026, 12],
   'jan_27': [2027, 1], 'feb_27': [2027, 2], 'mar_27': [2027, 3],
+  'apr_27': [2027, 4], 'may_27': [2027, 5], 'jun_27': [2027, 6],
 }
 
 export interface WeekInfo {
@@ -37,6 +38,7 @@ export interface SkuMaster {
   safetyStock: number
   bufferStock: number
   status: string
+  demandSource?: string
 }
 
 export interface WeeklyRow {
@@ -71,6 +73,14 @@ function getForecastQty(
   demandForecast: Map<string, number> | null   // wkLabel → qty from demand_forecast table
 ): number {
   const wksInMonth = MONTH_WEEKS[month] || 4
+
+  // 'Attach Rate' SKUs: demand_forecast rows (RM x attach rate, channel-split,
+  // pre-computed by generateAttachRateForecast) are authoritative. No fallback
+  // to ASP or historical average - absence of rows means zero planned demand.
+  if (sku.demandSource === 'Attach Rate') {
+    const qty = demandForecast?.get(wkLabel)
+    return qty !== undefined ? qty : 0
+  }
 
   if (sku.avgSellingPrice > 0 && forecast) {
     // ASP > 0: use Google Sheet forecast (Revenue / ASP model)
@@ -128,7 +138,7 @@ export function computeSD(params: {
     // Backorder is consumed in the current week only
     const backorderThisWk = isCurrentWk ? backorderQty : 0
 
-    const forecastRm = sku.avgSellingPrice > 0 && forecast
+    const forecastRm = forecast
       ? (() => {
           const colKey = Object.entries(MONTHLY_FORECAST_COLS).find(
             ([, [y, m]]) => y === wk.year && m === wk.month
@@ -165,7 +175,7 @@ export function computeSD(params: {
     : 0
   const woc = avgDemand > 0 ? curBalance / avgDemand : 0
 
-  // ── LT-aware status logic ─────────────────────────────────────────────────
+  // ── LT-aware status logic ─────────────────────────────────────────────────────────────────────
   //
   // Find the first week where balance < 0 (committed supply only — uncommitted
   // is excluded intentionally: a PO not yet confirmed cannot prevent a stockout).
