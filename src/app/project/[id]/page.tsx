@@ -1,9 +1,9 @@
 'use client'
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
 import Sidebar from '@/components/layout/Sidebar'
-import SDTable from '@/components/sd/SDTable'
+import { SDGrid } from '@/components/sd/SDTable'
 import ComponentSD from '@/components/sd/ComponentSD'
 import dynamic from 'next/dynamic'
 import { computeMRP } from '@/lib/bom-mrp'
@@ -20,7 +20,7 @@ const ForecastChart = dynamic(
 import { computeSD, FLAG_DISPLAY } from '@/lib/sd-compute'
 import type { SkuSdResult, WeekInfo } from '@/lib/sd-compute'
 import { loadDemandForecast } from '@/lib/forecasting/forecast-lookup'
-import { RefreshCw, Download } from 'lucide-react'
+import { RefreshCw, Download, ChevronDown, ChevronRight } from 'lucide-react'
 
 function getCurrentMondayDate(): string {
   const now = new Date()
@@ -46,14 +46,20 @@ export default function ProjectPage() {
   const [skuResults, setSkuResults] = useState<SkuSdResult[]>([])
   const [loading, setLoading] = useState(true)
   const [lastUpdated, setLastUpdated] = useState<string>('')
-  const [selectedSku, setSelectedSku] = useState<string>('')
-  const [mrpResults, setMrpResults] = useState<ComponentMrpResult[]>([])
-  const [fgPartNumber, setFgPartNumber] = useState<string>('')
+
+  // Which SKU's "BOM & History" panel is expanded — only one at a time to
+  // keep MRP computation + chart rendering cheap. null = all collapsed.
+  const [expandedSku, setExpandedSku] = useState<string | null>(null)
+
   const [bomFgParts, setBomFgParts] = useState<any[]>([])
   const [bomLinesAll, setBomLinesAll] = useState<any[]>([])
   const [bomComponents, setBomComponents] = useState<ComponentMaster[]>([])
   const [bomComponentCommits, setBomComponentCommits] = useState<Record<string, Record<string, number>>>({})
   const [bomComponentUncommits, setBomComponentUncommits] = useState<Record<string, Record<string, number>>>({})
+
+  // Lazily computed per SKU, cached once computed so re-expanding is instant.
+  const [mrpBySku, setMrpBySku] = useState<Record<string, ComponentMrpResult[]>>({})
+  const [fgPartBySku, setFgPartBySku] = useState<Record<string, string>>({})
 
   useEffect(() => {
     sessionStorage.setItem('ctg_last_brand', brand)
@@ -62,6 +68,8 @@ export default function ProjectPage() {
 
   async function loadAll() {
     setLoading(true)
+    setExpandedSku(null)
+    setMrpBySku({})
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
@@ -183,9 +191,8 @@ export default function ProjectPage() {
     })
 
     setSkuResults(results)
-    if (results.length > 0) setSelectedSku(results[0].sku.sku)
 
-    // ── BOM MRP raw data (recomputed per selected SKU in a separate effect below) ──
+    // ── BOM MRP raw data (MRP itself is computed lazily per-SKU on expand) ──
     if (allProjectIds.length > 0) {
       const { data: fgParts } = await supabase
         .from('parts')
@@ -282,23 +289,19 @@ export default function ProjectPage() {
     setLoading(false)
   }
 
-  // Recompute BOM/MRP explosion whenever the selected SKU changes (or the
-  // underlying raw BOM data finishes loading). Previously this only ran once
-  // on initial load, keyed off the first SKU in the list — so the "BOM
-  // Component Orders" widget showed stale components/qty for every other SKU.
-  useEffect(() => {
-    if (!selectedSku || weeks.length === 0 || bomFgParts.length === 0 || bomLinesAll.length === 0 || bomComponents.length === 0) return
+  // Compute MRP/BOM explosion for one SKU on demand (first expand only —
+  // cached in mrpBySku after that). Keeps the page fast with 10+ SKUs since
+  // we're not exploding BOM for every SKU on every load.
+  function ensureMrpForSku(sku: string) {
+    if (mrpBySku[sku] || bomFgParts.length === 0 || bomLinesAll.length === 0 || bomComponents.length === 0 || weeks.length === 0) return
 
-    const fgPart = bomFgParts.find((p: any) => p.master_sku_ref === selectedSku)
+    const fgPart = bomFgParts.find((p: any) => p.master_sku_ref === sku)
       ?? bomFgParts.find((p: any) => p.master_sku_ref != null)
       ?? bomFgParts[0]
     if (!fgPart) return
 
-    setFgPartNumber(fgPart.part_number)
-
     const fgSkuResult = skuResults.find(r => r.sku.sku === fgPart.master_sku_ref)
-      ?? skuResults.find(r => r.sku.sku === selectedSku)
-      ?? skuResults[0]
+      ?? skuResults.find(r => r.sku.sku === sku)
     const fgDemandMap = new Map<string, number>()
     if (fgSkuResult) {
       fgSkuResult.weeks.forEach(w => fgDemandMap.set(w.wkLabel, w.forecastQty))
@@ -314,12 +317,17 @@ export default function ProjectPage() {
       componentSupplyCommits: bomComponentCommits,
       componentSupplyUncommits: bomComponentUncommits,
     })
-    setMrpResults(mrp)
-  }, [selectedSku, bomFgParts, bomLinesAll, bomComponents, bomComponentCommits, bomComponentUncommits, weeks, skuResults])
+    setMrpBySku(prev => ({ ...prev, [sku]: mrp }))
+    setFgPartBySku(prev => ({ ...prev, [sku]: fgPart.part_number }))
+  }
 
-  const currentSkuResult = skuResults.find(s => s.sku.sku === selectedSku) || skuResults[0]
-  const flag = currentSkuResult ? FLAG_DISPLAY[currentSkuResult.flag] : null
-  const nextCommit = currentSkuResult?.weeks.find(w => w.supplyCommit > 0)
+  function toggleExpand(sku: string) {
+    setExpandedSku(prev => {
+      const next = prev === sku ? null : sku
+      if (next) ensureMrpForSku(next)
+      return next
+    })
+  }
 
   function getAlertMessage(s: SkuSdResult) {
     const bo = s.backorderQty > 0 ? ` Backorder: ${s.backorderQty.toLocaleString()} units pending.` : ''
@@ -329,18 +337,18 @@ export default function ProjectPage() {
     return `${s.sku.sku} — healthy. WoC: ${s.weeksOfCover} wks.`
   }
 
-  const alertBg: Record<string, string> = {
-    STOCKOUT:   '',
-    RELEASE_PO: '',
-    PLAN_PO:    '',
-    OK:         '',
-  }
   const alertStyle: Record<string, React.CSSProperties> = {
     STOCKOUT:   { background: '#FAEAEA', border: '1px solid #F5C6C4', color: '#C5453F' },
     RELEASE_PO: { background: '#FEF3E2', border: '1px solid #F9DEB8', color: '#E8A33D' },
     PLAN_PO:    { background: '#FEF3E2', border: '1px solid #F9DEB8', color: '#E8A33D' },
     OK:         { background: '#DCEAE8', border: '1px solid #DCEAE8', color: '#0E5C56' },
   }
+
+  const sortedSkus = useMemo(() =>
+    [...skuResults].sort((a, b) => (a.sku.description || '').localeCompare(b.sku.description || '')),
+    [skuResults])
+
+  const flaggedCount = skuResults.filter(s => s.flag !== 'OK').length
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: '#F4F2EE' }}>
@@ -368,88 +376,153 @@ export default function ProjectPage() {
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {loading ? (
             <div className="flex items-center justify-center h-40 text-sm" style={{ color: '#4B5563' }}>Loading S&D data...</div>
+          ) : sortedSkus.length === 0 ? (
+            <div className="text-sm text-center py-8" style={{ color: '#4B5563' }}>No SKU data found for {brand}</div>
           ) : (
             <>
-              {currentSkuResult && flag && (
-                <div className="grid grid-cols-4 gap-4">
-                  <div className="bg-white rounded-xl p-4" style={{ border: '1px solid #E4DDD3' }}>
-                    <div className="text-xs mb-1" style={{ color: '#4B5563' }}>On-Hand ({currentSkuResult.sku.sku})</div>
-                    <div className="text-2xl font-semibold" style={{ color: '#1F2937', fontFamily: 'Cambria, Georgia, serif' }}>{currentSkuResult.onHand.toLocaleString()}</div>
-                    <div className="text-xs mt-1" style={{ color: '#4B5563' }}>units in stock</div>
-                  </div>
-                  <div className="bg-white rounded-xl p-4" style={{ border: '1px solid #E4DDD3' }}>
-                    <div className="text-xs mb-1" style={{ color: '#4B5563' }}>Weeks of Cover</div>
-                    <div className="text-2xl font-semibold" style={{
-                      color: currentSkuResult.weeksOfCover < 0 ? '#C5453F' : currentSkuResult.weeksOfCover < 4 ? '#E8A33D' : '#2F9E68',
-                      fontFamily: 'Cambria, Georgia, serif'
-                    }}>{currentSkuResult.weeksOfCover}</div>
-                    <div className="text-xs mt-1" style={{ color: '#4B5563' }}>Target: ≥ 8 wks</div>
-                  </div>
-                  <div className="bg-white rounded-xl p-4" style={{ border: '1px solid #E4DDD3' }}>
-                    <div className="text-xs mb-1" style={{ color: '#4B5563' }}>Next PO (Commit)</div>
-                    <div className="text-2xl font-semibold" style={{ color: '#1F2937', fontFamily: 'Cambria, Georgia, serif' }}>
-                      {nextCommit ? nextCommit.supplyCommit.toLocaleString() : '—'}
-                    </div>
-                    <div className="text-xs mt-1" style={{ color: '#4B5563' }}>
-                      {nextCommit ? `ETA: ${nextCommit.wkLabel}` : 'No open PO'}
-                    </div>
-                  </div>
-                  <div className="bg-white rounded-xl p-4" style={{ border: '1px solid #E4DDD3' }}>
-                    <div className="text-xs mb-1" style={{ color: '#4B5563' }}>Status</div>
-                    <div className="text-lg font-semibold flex items-center gap-1.5 mt-1" style={{ color: flag.color, fontFamily: 'Cambria, Georgia, serif' }}>
-                      <span>{flag.emoji}</span><span>{flag.label}</span>
-                    </div>
-                    <div className="text-xs mt-1" style={{ color: '#4B5563' }}>
-                      {currentSkuResult.flag === 'RELEASE_PO' && `Release by ${currentSkuResult.plannedPoReleaseDateWk ?? '—'}`}
-                      {currentSkuResult.flag === 'PLAN_PO' && `Plan by ${currentSkuResult.plannedPoReleaseDateWk ?? '—'}`}
-                      {currentSkuResult.flag === 'STOCKOUT' && 'Urgent action required'}
-                      {currentSkuResult.flag === 'OK' && 'No action needed'}
-                    </div>
-                  </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold" style={{ color: '#1F2937', fontFamily: 'Cambria, Georgia, serif' }}>All SKUs — Weekly Supply & Demand</h2>
+                  <p className="text-xs mt-0.5" style={{ color: '#4B5563' }}>
+                    Rolling 52 weeks from {CURRENT_WK} · {sortedSkus.length} SKUs · scroll to review each, expand "BOM &amp; History" for component-level detail
+                  </p>
                 </div>
-              )}
-
-              {currentSkuResult && currentSkuResult.flag !== 'OK' && (
-                <div className="flex items-start justify-between gap-3 px-4 py-3 rounded-xl text-sm" style={alertStyle[currentSkuResult.flag]}>
-                  <p className="text-sm leading-relaxed">{getAlertMessage(currentSkuResult)}</p>
-                  <span className="text-xs font-medium whitespace-nowrap cursor-pointer opacity-70 hover:opacity-100">View PO →</span>
-                </div>
-              )}
-
-              <div className="bg-white rounded-xl p-5" style={{ border: '1px solid #E4DDD3' }}>
-                <div className="flex items-center gap-2 mb-4">
-                  <h2 className="text-sm font-semibold" style={{ color: '#1F2937', fontFamily: 'Cambria, Georgia, serif' }}>Weekly Supply & Demand</h2>
-                  <span className="text-xs" style={{ color: '#4B5563' }}>Rolling 52 weeks from {CURRENT_WK}</span>
-                </div>
-                {skuResults.length > 0 && weeks.length > 0
-                  ? <SDTable skus={skuResults} weeks={weeks} currentWk={CURRENT_WK} selectedSku={selectedSku} onSkuChange={setSelectedSku} />
-                  : <div className="text-sm text-center py-8" style={{ color: '#4B5563' }}>No SKU data found for {brand}</div>}
+                {flaggedCount > 0 && (
+                  <span className="text-xs px-2.5 py-1 rounded-full font-medium" style={{ background: '#FEF3E2', color: '#E8A33D', border: '1px solid #F9DEB8' }}>
+                    {flaggedCount} SKU{flaggedCount > 1 ? 's' : ''} need attention
+                  </span>
+                )}
               </div>
 
-              {skuResults.length > 0 && (
-                <ForecastChart
-                  selectedSku={selectedSku}
-                  skuResult={skuResults.find(s => s.sku.sku === selectedSku) ?? null}
+              {sortedSkus.map(result => (
+                <SkuCard
+                  key={result.sku.sku}
+                  result={result}
+                  weeks={weeks}
+                  currentWk={CURRENT_WK}
+                  expanded={expandedSku === result.sku.sku}
+                  onToggle={() => toggleExpand(result.sku.sku)}
+                  mrpResults={mrpBySku[result.sku.sku] ?? []}
+                  fgPartNumber={fgPartBySku[result.sku.sku] ?? ''}
+                  alertStyle={alertStyle}
+                  getAlertMessage={getAlertMessage}
                   brand={brand}
                 />
-              )}
-
-              {mrpResults.length > 0 && weeks.length > 0 && (() => {
-                const fgSkuResult = skuResults.find(s => s.sku.sku === selectedSku) || skuResults[0]
-                return (
-                  <ComponentSD
-                    results={mrpResults}
-                    weeks={weeks}
-                    currentWk={CURRENT_WK}
-                    fgSku={fgSkuResult?.sku.sku ?? fgPartNumber}
-                    fgDescription={fgSkuResult?.sku.description ?? ''}
-                  />
-                )
-              })()}
+              ))}
             </>
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Single SKU card: KPIs + alert + S&D grid always visible, BOM/forecast/
+// history collapsed behind a per-SKU expander. ─────────────────────────────
+function SkuCard({
+  result, weeks, currentWk, expanded, onToggle, mrpResults, fgPartNumber,
+  alertStyle, getAlertMessage, brand,
+}: {
+  result: SkuSdResult
+  weeks: WeekInfo[]
+  currentWk: string
+  expanded: boolean
+  onToggle: () => void
+  mrpResults: ComponentMrpResult[]
+  fgPartNumber: string
+  alertStyle: Record<string, React.CSSProperties>
+  getAlertMessage: (s: SkuSdResult) => string
+  brand: string
+}) {
+  const flag = FLAG_DISPLAY[result.flag]
+  const nextCommit = result.weeks.find(w => w.supplyCommit > 0)
+  const hasBackorder = result.backorderQty > 0
+
+  return (
+    <div className="bg-white rounded-xl overflow-hidden" style={{ border: '1px solid #E4DDD3' }}>
+      {/* Header: SKU identity + KPIs */}
+      <div className="flex items-center justify-between gap-4 flex-wrap px-5 py-4" style={{ borderBottom: '1px solid #E4DDD3' }}>
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className="font-mono text-xs font-bold px-2 py-1 rounded flex-shrink-0" style={{ background: '#EEF0F4', color: '#3A4457' }}>{result.sku.sku}</span>
+          <span className="text-sm font-semibold truncate">{result.sku.description}</span>
+          <span className="text-xs flex-shrink-0" style={{ color: '#98A2B3' }}>
+            {result.sku.uom || 'Unit'} · MOQ {(result.sku.moq || 0).toLocaleString()} · LT {result.sku.leadTimeWk || 0} wks
+          </span>
+          {hasBackorder && (
+            <span className="text-xs bg-[#FEF3C7] text-[#92400E] border border-[#FCD34D] px-2 py-0.5 rounded-full font-medium flex-shrink-0">
+              Backorder: {result.backorderQty.toLocaleString()}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-5 flex-shrink-0">
+          <div className="text-right">
+            <div className="text-[10px] uppercase tracking-wide" style={{ color: '#98A2B3' }}>On-hand</div>
+            <div className="text-sm font-bold">{result.onHand.toLocaleString()}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-[10px] uppercase tracking-wide" style={{ color: '#98A2B3' }}>WoC</div>
+            <div className="text-sm font-bold" style={{ color: result.weeksOfCover < 0 ? '#C5453F' : result.weeksOfCover < 4 ? '#E8A33D' : '#2F9E68' }}>{result.weeksOfCover}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-[10px] uppercase tracking-wide" style={{ color: '#98A2B3' }}>Next PO</div>
+            <div className="text-sm font-bold" style={{ color: nextCommit ? '#1F2937' : '#98A2B3' }}>{nextCommit ? nextCommit.supplyCommit.toLocaleString() : '—'}</div>
+          </div>
+          <span className="text-xs font-bold px-2.5 py-1 rounded-lg whitespace-nowrap" style={{ color: flag.color, background: result.flag === 'OK' ? '#DCEAE8' : '#FEF3E2' }}>
+            {flag.emoji} {flag.label}
+          </span>
+        </div>
+      </div>
+
+      {/* Inline alert, if any */}
+      {result.flag !== 'OK' && (
+        <div className="flex items-start justify-between gap-3 px-5 py-2.5 text-xs" style={alertStyle[result.flag]}>
+          <p className="leading-relaxed">{getAlertMessage(result)}</p>
+          <span className="font-medium whitespace-nowrap cursor-pointer opacity-70 hover:opacity-100">View PO →</span>
+        </div>
+      )}
+
+      {/* Weekly S&D grid — always visible */}
+      <div className="px-5 pt-4 pb-2">
+        <SDGrid current={result} weeks={weeks} currentWk={currentWk} />
+      </div>
+
+      {/* Expand: BOM component orders + demand forecast + sales history */}
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center gap-2 px-5 py-2.5 text-xs font-medium hover:bg-[#F9FAFB] transition-colors"
+        style={{ borderTop: '1px solid #E4DDD3', color: '#4B5563' }}
+      >
+        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        BOM & History
+        <span className="text-[10px] font-normal" style={{ color: '#98A2B3' }}>
+          — demand forecast chart, sales history, BOM component orders
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="px-5 pb-5" style={{ borderTop: '1px solid #E4DDD3', background: '#FCFBF8' }}>
+          <div className="pt-4">
+            <ForecastChart
+              selectedSku={result.sku.sku}
+              skuResult={result}
+              brand={brand}
+            />
+          </div>
+          {mrpResults.length > 0 && weeks.length > 0 ? (
+            <ComponentSD
+              results={mrpResults}
+              weeks={weeks}
+              currentWk={currentWk}
+              fgSku={result.sku.sku}
+              fgDescription={result.sku.description || ''}
+            />
+          ) : (
+            <div className="bg-white rounded-xl p-5 mt-4 text-xs" style={{ border: '1px solid #E4DDD3', color: '#98A2B3' }}>
+              {fgPartNumber ? 'Loading BOM component orders...' : `No BOM components found for ${result.sku.sku}. Add BOM lines in PLM to enable MRP.`}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
