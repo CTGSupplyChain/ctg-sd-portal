@@ -154,7 +154,9 @@ function ComponentTable({
   currentWk: string
   monthSpans: { label: string; count: number }[]
 }) {
-  const [open, setOpen] = useState(true)
+  // Collapsed by default — components expand on demand rather than all
+  // rendering open the moment the parent "BOM & History" panel is expanded.
+  const [open, setOpen] = useState(false)
   const comp = result.component
   const catStyle = CAT_COLORS[comp.category] || 'bg-gray-50 text-gray-600 border-gray-200'
   const flagBadge = result.earliestPoReleaseFlag ? FLAG_BADGE[result.earliestPoReleaseFlag] : null
