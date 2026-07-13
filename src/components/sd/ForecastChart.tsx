@@ -247,6 +247,18 @@ export default function ForecastChart({ selectedSku, skuResult }: ForecastChartP
       })
     }
 
+    // Auto-scale the Y-axis to the series a viewer actually reads (Actuals,
+    // Forecast, S&D plan, B2B/B2C). The CI band and safety-stock line are
+    // intentionally excluded — a wide confidence interval was stretching the
+    // axis out to ~9k even when every visible line sat around 2-3k.
+    const scaleRelevantValues: number[] = []
+    ;['Forecast', 'Actuals', 'B2B', 'B2C', 'S&D plan'].forEach(label => {
+      const ds = datasets.find(d => d.label === label)
+      if (ds) ds.data.forEach((v: number | null) => { if (v !== null && !Number.isNaN(v)) scaleRelevantValues.push(v) })
+    })
+    const dataMax = scaleRelevantValues.length > 0 ? Math.max(...scaleRelevantValues) : 0
+    const suggestedMax = dataMax > 0 ? Math.ceil((dataMax * 1.15) / 100) * 100 : undefined
+
     const ctx = canvasRef.current.getContext('2d')
     chartRef.current = new chartLib.current.Chart(ctx, {
       type: 'line',
@@ -274,6 +286,7 @@ export default function ForecastChart({ selectedSku, skuResult }: ForecastChartP
           },
           y: {
             min: 0,
+            suggestedMax,
             ticks: {
               font: { size: 11 }, color: '#4B5563',
               callback: (v: number) => v >= 1000 ? `${(v/1000).toFixed(1)}k` : String(Math.round(v)),
