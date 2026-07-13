@@ -257,7 +257,11 @@ export default function ForecastChart({ selectedSku, skuResult }: ForecastChartP
       if (ds) ds.data.forEach((v: number | null) => { if (v !== null && !Number.isNaN(v)) scaleRelevantValues.push(v) })
     })
     const dataMax = scaleRelevantValues.length > 0 ? Math.max(...scaleRelevantValues) : 0
-    const suggestedMax = dataMax > 0 ? Math.ceil((dataMax * 1.15) / 100) * 100 : undefined
+    // Hard cap, not a suggestion: Chart.js will still expand a suggestedMax
+    // to fit every dataset (including the CI band), which is exactly the
+    // behavior we're overriding here. An explicit max clips the CI band's
+    // rendered fill at the axis edge instead of dictating the scale.
+    const yAxisMax = dataMax > 0 ? Math.ceil((dataMax * 1.15) / 100) * 100 : undefined
 
     const ctx = canvasRef.current.getContext('2d')
     chartRef.current = new chartLib.current.Chart(ctx, {
@@ -286,7 +290,7 @@ export default function ForecastChart({ selectedSku, skuResult }: ForecastChartP
           },
           y: {
             min: 0,
-            suggestedMax,
+            max: yAxisMax,
             ticks: {
               font: { size: 11 }, color: '#4B5563',
               callback: (v: number) => v >= 1000 ? `${(v/1000).toFixed(1)}k` : String(Math.round(v)),
