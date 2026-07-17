@@ -171,8 +171,10 @@ export default function ProjectPage() {
       const wkLabels = new Set(wkList.map(w => w.label))
       skuSupply.forEach((s: any) => {
         const wk = (s.receipt_wk && wkLabels.has(s.receipt_wk)) ? s.receipt_wk : CURRENT_WK
-        if (s.commit_status === 'Commit') commits[wk] = (commits[wk] || 0) + s.qty
-        else uncommits[wk] = (uncommits[wk] || 0) + s.qty
+        const remainingQty = s.balance_qty ?? (s.qty - (s.qty_shipped || 0))
+        const incomingQty = Math.max(remainingQty, 0)
+        if (s.commit_status === 'Commit') commits[wk] = (commits[wk] || 0) + incomingQty
+        else uncommits[wk] = (uncommits[wk] || 0) + incomingQty
       })
       return computeSD({
         sku,
