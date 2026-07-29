@@ -20,7 +20,7 @@ const ForecastChart = dynamic(
 import { computeSD, FLAG_DISPLAY } from '@/lib/sd-compute'
 import type { SkuSdResult, WeekInfo } from '@/lib/sd-compute'
 import { loadDemandForecast } from '@/lib/forecasting/forecast-lookup'
-import { RefreshCw, Download, ChevronDown, ChevronRight } from 'lucide-react'
+import { RefreshCw, Download, ChevronDown, ChevronRight, Search, X } from 'lucide-react'
 
 function getCurrentMondayDate(): string {
   const now = new Date()
@@ -50,6 +50,9 @@ export default function ProjectPage() {
   // Which SKU's "BOM & History" panel is expanded — only one at a time to
   // keep MRP computation + chart rendering cheap. null = all collapsed.
   const [expandedSku, setExpandedSku] = useState<string | null>(null)
+
+  // SKU search — filters the list below by SKU code or description
+  const [searchQuery, setSearchQuery] = useState('')
 
   const [bomFgParts, setBomFgParts] = useState<any[]>([])
   const [bomLinesAll, setBomLinesAll] = useState<any[]>([])
@@ -350,6 +353,15 @@ export default function ProjectPage() {
     [...skuResults].sort((a, b) => (a.sku.description || '').localeCompare(b.sku.description || '')),
     [skuResults])
 
+  const filteredSkus = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return sortedSkus
+    return sortedSkus.filter(r =>
+      r.sku.sku.toLowerCase().includes(q) ||
+      (r.sku.description || '').toLowerCase().includes(q)
+    )
+  }, [sortedSkus, searchQuery])
+
   const flaggedCount = skuResults.filter(s => s.flag !== 'OK').length
 
   return (
@@ -396,7 +408,38 @@ export default function ProjectPage() {
                 )}
               </div>
 
-              {sortedSkus.map(result => (
+              <div>
+                <div className="relative max-w-md">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#9CA3AF' }} />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    placeholder="Search SKU code or product description"
+                    className="w-full text-xs rounded-lg pl-8 pr-8 py-2 focus:outline-none"
+                    style={{ border: '1px solid #E4DDD3', color: '#1F2937', background: '#FFFFFF' }}
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2"
+                      style={{ color: '#9CA3AF' }}
+                      aria-label="Clear search"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+                {searchQuery && (
+                  <p className="text-xs mt-1.5" style={{ color: '#4B5563' }}>
+                    Matching {filteredSkus.length} of {sortedSkus.length} SKUs
+                  </p>
+                )}
+              </div>
+
+              {filteredSkus.length === 0 ? (
+                <div className="text-sm text-center py-8" style={{ color: '#4B5563' }}>No SKUs match "{searchQuery}"</div>
+              ) : filteredSkus.map(result => (
                 <SkuCard
                   key={result.sku.sku}
                   result={result}
@@ -522,7 +565,8 @@ function SkuCard({
             <div className="bg-white rounded-xl p-5 mt-4 text-xs" style={{ border: '1px solid #E4DDD3', color: '#98A2B3' }}>
               {fgPartNumber ? 'Loading BOM component orders...' : `No BOM components found for ${result.sku.sku}. Add BOM lines in PLM to enable MRP.`}
             </div>
-          )}
+          )
+        }
         </div>
       )}
     </div>
