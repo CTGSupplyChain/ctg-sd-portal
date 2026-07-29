@@ -278,7 +278,7 @@ export default function ProjectPage() {
       const componentUncommits: Record<string, Record<string, number>> = {}
       ;(componentSupplyData || []).forEach((s: any) => {
         if (!s.part_number) return
-        const wk = (s.receipt_wk && wkLabelSet.has(s.receipt_wk)) ? s.receipt_wk : CURRENT_WK,
+        const wk = (s.receipt_wk && wkLabelSet.has(s.receipt_wk)) ? s.receipt_wk : CURRENT_WK
         const target = s.commit_status === 'Commit' ? componentCommits : componentUncommits
         if (!target[s.part_number]) target[s.part_number] = {}
         target[s.part_number][wk] = (target[s.part_number][wk] || 0) + (s.qty || 0)
@@ -374,7 +374,7 @@ export default function ProjectPage() {
           <div className="flex items-center gap-3">
             <h1 className="text-sm font-semibold" style={{ color: '#1F2937', fontFamily: 'Cambria, Georgia, serif' }}>Supply & Demand</h1>
             <span className="text-xs px-2.5 py-1 rounded-full font-medium" style={{ background: '#DCEAE8', color: '#0E5C56', border: '1px solid #DCEAE8' }}>{brand}</span>
-            <span className="text-xs px-2.5 py-1 rounded-full" style={{ background: '#E4DDC3', color: '#4B5563' }}>{CURRENT_WK} 2026</span>
+            <span className="text-xs px-2.5 py-1 rounded-full" style={{ background: '#E4DDD3', color: '#4B5563' }}>{CURRENT_WK} 2026</span>
           </div>
           <div className="flex items-center gap-2">
             {lastUpdated && <span className="text-xs" style={{ color: '#4B5563' }}>Inventory: {lastUpdated}</span>}
@@ -417,7 +417,7 @@ export default function ProjectPage() {
                     onChange={e => setSearchQuery(e.target.value)}
                     placeholder="Search SKU code or product description"
                     className="w-full text-xs rounded-lg pl-8 pr-8 py-2 focus:outline-none"
-                    style={{ border: '1px solid #E4DDC3', color: '#1F2937', background: '#FFFFFF' }}
+                    style={{ border: '1px solid #E4DDD3', color: '#1F2937', background: '#FFFFFF' }}
                   />
                   {searchQuery && (
                     <button
@@ -484,7 +484,7 @@ function SkuCard({
   const hasBackorder = result.backorderQty > 0
 
   return (
-    <div className="bg-white rounded-xl overflow-hidden" style={{ border: '1px solid #E4DDC3' }}>
+    <div className="bg-white rounded-xl overflow-hidden" style={{ border: '1px solid #E4DDD3' }}>
       {/* Header: SKU identity + KPIs */}
       <div className="flex items-center justify-between gap-4 flex-wrap px-5 py-4" style={{ borderBottom: '1px solid #E4DDD3' }}>
         <div className="flex items-center gap-2.5 min-w-0">
@@ -545,7 +545,7 @@ function SkuCard({
       </button>
 
       {expanded && (
-        <div className="px-5 pb-5" style={{ borderTop: '1px solid #E4DDC3', background: '#FCFBF8' }}>
+        <div className="px-5 pb-5" style={{ borderTop: '1px solid #E4DDD3', background: '#FCFBF8' }}>
           <div className="pt-4">
             <ForecastChart
               selectedSku={result.sku.sku}
