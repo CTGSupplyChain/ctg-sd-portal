@@ -46,6 +46,9 @@ export default function ProjectPage() {
   const [skuResults, setSkuResults] = useState<SkuSdResult[]>([])
   const [loading, setLoading] = useState(true)
   const [lastUpdated, setLastUpdated] = useState<string>('')
+  // How many of this brand's SKUs are showing a live WMS figure vs the last
+  // Excel snapshot. Surfaced in the header so the number's provenance is visible.
+  const [liveSkus, setLiveSkus] = useState<{ live: number; total: number }>({ live: 0, total: 0 })
 
   // Which SKU's "BOM & History" panel is expanded — only one at a time to
   // keep MRP computation + chart rendering cheap. null = all collapsed.
@@ -101,29 +104,31 @@ export default function ProjectPage() {
 
     const { data: skuData } = await supabase.from('master_sku').select('*').eq('brand', brand).eq('status', 'Active')
 
-    // WMS variants (e.g. iLady Box SKUs) consolidate into their master SKU
     const masterSkus: string[] = skuData?.map((s: any) => s.sku) || []
-    const { data: mapRows } = await supabase
-      .from('sku_wms_mapping').select('wms_sku, master_sku').in('master_sku', masterSkus)
-    const wmsToMaster = new Map<string, string>((mapRows || []).map((m: any) => [m.wms_sku, m.master_sku]))
-    const stockSkus = [...new Set([...masterSkus, ...Array.from(wmsToMaster.keys())])]
 
+    // On-hand comes from v_stock_current, which serves the live WMS webhook value
+    // when that SKU has moved since the last Excel upload and falls back to the
+    // snapshot otherwise. The view already resolves sku_wms_mapping, so the old
+    // variant-consolidation pass here is no longer needed - and must not be
+    // reinstated: Bottle and Box are distinct products with separate WMS stock,
+    // so summing them would double-count.
     const { data: stockData } = await supabase
-      .from('wms_inventory_snapshots').select('sku, atp, snapshot_date')
-      .in('sku', stockSkus).order('snapshot_date', { ascending: false })
+      .from('v_stock_current')
+      .select('portal_sku, atp_current, atp_source, live_event_at, snapshot_date')
+      .in('portal_sku', masterSkus)
 
     const latestStock: Record<string, number> = {}
-    const stockDates: string[] = []
-    // Latest snapshot per WMS sku, then sum mapped variants into the master SKU
-    const latestByWms: Record<string, number> = {}
+    let liveCount = 0
+    let newestStamp = ''
     stockData?.forEach((s: any) => {
-      if (latestByWms[s.sku] === undefined) { latestByWms[s.sku] = s.atp; stockDates.push(s.snapshot_date) }
+      latestStock[s.portal_sku] = s.atp_current || 0
+      const stamp = s.atp_source === 'live' ? (s.live_event_at || '') : (s.snapshot_date || '')
+      if (s.atp_source === 'live') liveCount++
+      // Both are ISO-prefixed, so lexical comparison orders dates and timestamps alike
+      if (stamp > newestStamp) newestStamp = stamp
     })
-    Object.entries(latestByWms).forEach(([wsku, atp]) => {
-      const master = wmsToMaster.get(wsku) ?? wsku
-      latestStock[master] = (latestStock[master] || 0) + (atp || 0)
-    })
-    if (stockDates[0]) setLastUpdated(stockDates[0])
+    setLiveSkus({ live: liveCount, total: stockData?.length ?? 0 })
+    if (newestStamp) setLastUpdated(newestStamp.slice(0, 16).replace('T', ' '))
 
     const { data: projectRows } = await supabase
       .from('projects').select('id').eq('brand', brand)
@@ -377,7 +382,23 @@ export default function ProjectPage() {
             <span className="text-xs px-2.5 py-1 rounded-full" style={{ background: '#E4DDD3', color: '#4B5563' }}>{CURRENT_WK} 2026</span>
           </div>
           <div className="flex items-center gap-2">
-            {lastUpdated && <span className="text-xs" style={{ color: '#4B5563' }}>Inventory: {lastUpdated}</span>}
+            {lastUpdated && (
+              <span className="text-xs flex items-center gap-1.5" style={{ color: '#4B5563' }}>
+                <span
+                  title={liveSkus.live > 0
+                    ? `${liveSkus.live} of ${liveSkus.total} SKUs on live WMS data`
+                    : 'All SKUs from the last Excel upload'}
+                  style={{
+                    width: 6, height: 6, borderRadius: '50%', display: 'inline-block',
+                    background: liveSkus.live > 0 ? '#2F9E68' : '#B8A888',
+                  }}
+                />
+                Inventory: {lastUpdated}
+                {liveSkus.total > 0 && (
+                  <span style={{ color: '#8A8578' }}>· {liveSkus.live}/{liveSkus.total} live</span>
+                )}
+              </span>
+            )}
             <button className="flex items-center gap-1.5 text-xs px-3 py-1.5 border border-[#E4DDD3] rounded-lg hover:bg-[#F4F2EE]" style={{ color: '#4B5563' }}>
               <Download size={12} /> Export
             </button>
