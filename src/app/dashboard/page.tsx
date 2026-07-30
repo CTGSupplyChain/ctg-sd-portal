@@ -24,6 +24,20 @@ interface BrandSummary {
 
 interface ChartPoint { wk: string; projected: number; safetyStock: number; poLanding: boolean }
 
+// Live health of the WMS webhook/pull pipeline. Read from v_wms_feed_health.
+// Heartbeat is the 5-min pull cron, NOT stock events - stock goes quiet overnight
+// and flagging on that would make the indicator cry wolf nightly.
+interface FeedHealth {
+  status: 'healthy' | 'degraded' | 'error' | 'down'
+  status_detail: string
+  pull_minutes_ago: number | null
+  event_minutes_ago: number | null
+  events_last_hour: number
+  skus_live: number
+  skus_total: number
+  pct_live: number | null
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 function kpiCard(bg: string, tc: string, sc: string, border: string, label: string, val: string | number, hint: string) {
@@ -37,6 +51,7 @@ export default function DashboardPage() {
   const router = useRouter()
 
   const [profile, setProfile] = useState<any>(null)
+  const [feed, setFeed] = useState<FeedHealth | null>(null)
   const [brands, setBrands] = useState<string[]>([])
   const [brandSummary, setBrandSummary] = useState<BrandSummary[]>([])
   const [kpis, setKpis] = useState<{
@@ -67,7 +82,7 @@ export default function DashboardPage() {
     const in84d = new Date(Date.now() + 84 * 86400000).toISOString().split('T')[0]
     const ago84d = new Date(Date.now() - 84 * 86400000).toISOString().split('T')[0]
 
-    const [skuRes, wmsRes, poRes, forecastRes, salesRes] = await Promise.all([
+    const [skuRes, wmsRes, poRes, forecastRes, salesRes, feedRes] = await Promise.all([
       supabase.from('master_sku')
         .select('sku, brand, avg_selling_price, safety_stock, lead_time_wk')
         .eq('status', 'Active'),
@@ -85,7 +100,10 @@ export default function DashboardPage() {
       supabase.from('sales_history')
         .select('brand, sku, iso_year, iso_week, qty')
         .gte('week_start_date', ago84d),
+      supabase.from('v_wms_feed_health').select('*').single(),
     ])
+
+    setFeed((feedRes.data as FeedHealth) ?? null)
 
     const skuData: SkuRow[] = skuRes.data || []
     const wmsRaw = wmsRes.data || []
@@ -271,6 +289,28 @@ export default function DashboardPage() {
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
+            {feed && (() => {
+              // Amber/red must be readable without hovering - a tooltip-only
+              // warning is the one that gets missed on the morning it matters.
+              const tone = {
+                healthy:  { dot: '#2F9E68', bg: '#FFFFFF', border: '#E4DDD3', text: '#4B5563', label: 'WMS feed live' },
+                degraded: { dot: '#C08A2E', bg: '#FDF6E7', border: '#E8D5A8', text: '#7A5B14', label: 'WMS feed delayed' },
+                error:    { dot: '#C0392B', bg: '#FBEDEB', border: '#E8B6AF', text: '#8C2A1E', label: 'WMS feed error' },
+                down:     { dot: '#C0392B', bg: '#FBEDEB', border: '#E8B6AF', text: '#8C2A1E', label: 'WMS feed disconnected' },
+              }[feed.status] ?? { dot: '#8A8578', bg: '#FFFFFF', border: '#E4DDD3', text: '#4B5563', label: 'WMS feed unknown' }
+              return (
+                <span
+                  title={`${feed.status_detail}\nLast pull: ${feed.pull_minutes_ago ?? '?'} min ago · last stock event: ${feed.event_minutes_ago ?? '?'} min ago · ${feed.events_last_hour} events in the last hour`}
+                  style={{ fontSize: 12, color: tone.text, background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 8, padding: '5px 13px', display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'help' }}
+                >
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: tone.dot, display: 'inline-block' }}/>
+                  {tone.label}
+                  {feed.status === 'healthy'
+                    ? <span style={{ color: '#8A8578' }}>· {feed.skus_live}/{feed.skus_total} SKUs live</span>
+                    : <span style={{ fontWeight: 600 }}>· check feed</span>}
+                </span>
+              )
+            })()}
             <span style={{ fontSize: 12, color: '#4B5563', background: '#FFFFFF', border: '1px solid #E4DDD3', borderRadius: 8, padding: '5px 13px', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#2F9E68', display: 'inline-block' }}/>All brands
             </span>
