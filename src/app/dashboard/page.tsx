@@ -120,7 +120,20 @@ export default function DashboardPage() {
     setProfile(prof)
 
     const isAdmin = prof?.role === 'admin' || prof?.role === 'supply_chain'
-    if (!isAdmin) { router.push('/project/SkinDae'); return }
+    if (!isAdmin) {
+      // Brand owners have no dashboard. Route to their own brand's S&D view,
+      // or to the forecast form if no brand is assigned yet. Previously this
+      // was hardcoded to '/project/SkinDae', which sent every non-admin into
+      // another brand's page where RLS then blanked it out.
+      const { data: access } = await supabase
+        .from('user_brand_access')
+        .select('brand')
+        .eq('user_id', user.id)
+        .order('brand')
+      const firstBrand = access?.[0]?.brand
+      router.push(firstBrand ? `/project/${encodeURIComponent(firstBrand)}` : '/forecast-submit')
+      return
+    }
 
     const [skuRes, stockRes, wmsLiveRes, poRes, forecastRes, feedRes, bomRes] = await Promise.all([
       supabase.from('master_sku')

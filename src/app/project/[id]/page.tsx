@@ -379,7 +379,7 @@ export default function ProjectPage() {
           <div className="flex items-center gap-3">
             <h1 className="text-sm font-semibold" style={{ color: '#1F2937', fontFamily: 'Cambria, Georgia, serif' }}>Supply & Demand</h1>
             <span className="text-xs px-2.5 py-1 rounded-full font-medium" style={{ background: '#DCEAE8', color: '#0E5C56', border: '1px solid #DCEAE8' }}>{brand}</span>
-            <span className="text-xs px-2.5 py-1 rounded-full" style={{ background: '#E4DDD3', color: '#4B5563' }}>{CURRENT_WK} 2026</span>
+            <span className="text-xs px-2.5 py-1 rounded-full" style={{ background: '#E4DDD3', color: '#4B5563' }}>{CURRENT_WK}</span>
           </div>
           <div className="flex items-center gap-2">
             {lastUpdated && (

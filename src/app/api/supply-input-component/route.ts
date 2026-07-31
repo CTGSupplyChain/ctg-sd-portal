@@ -51,9 +51,13 @@ function dateToWkLabel(dateStr: string): string {
   const d = new Date(dateStr + 'T00:00:00Z')
   const dayOfWeek = d.getUTCDay() || 7          // Sun=7, Mon=1
   d.setUTCDate(d.getUTCDate() + 4 - dayOfWeek)  // shift to Thursday
-  const jan1 = new Date(Date.UTC(d.getUTCFullYear(), 0, 1))
+  // d is now the Thursday of the week, so its year IS the ISO year.
+  const isoYear = d.getUTCFullYear()
+  const jan1 = new Date(Date.UTC(isoYear, 0, 1))
   const isoWeek = Math.ceil(((d.getTime() - jan1.getTime()) / 86400000 + 1) / 7)
-  return `WK${String(isoWeek).padStart(2, '0')}`
+  // Year-qualified: week_calendar.wk_label is unique per ISO year, so a bare
+  // 'WK01' is ambiguous across the 2026-W53 / 2027-W01 boundary.
+  return `${isoYear}-WK${String(isoWeek).padStart(2, '0')}`
 }
 
 // Add weeks to a date string
