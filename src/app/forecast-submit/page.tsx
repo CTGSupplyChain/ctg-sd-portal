@@ -107,7 +107,7 @@ export default function ForecastSubmitPage() {
       if (!session) { router.push('/login'); return }
       const [{ data, error }, { data: prof }] = await Promise.all([
         supabase.from('projects')
-          .select('id, project_name, brand, cPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_Downompany')
+          .select('id, project_name, brand, company')
           .eq('status', 'Active')
           .order('project_name'),
         supabase.from('profiles').select('email, full_name, role').eq('id', session.user.id).single(),
