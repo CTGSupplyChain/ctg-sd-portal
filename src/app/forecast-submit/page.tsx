@@ -107,7 +107,7 @@ export default function ForecastSubmitPage() {
       if (!session) { router.push('/login'); return }
       const [{ data, error }, { data: prof }] = await Promise.all([
         supabase.from('projects')
-          .select('id, project_name, brand, company')
+          .select('id, project_name, brand, cPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_DownPage_Downompany')
           .eq('status', 'Active')
           .order('project_name'),
         supabase.from('profiles').select('email, full_name, role').eq('id', session.user.id).single(),
@@ -565,7 +565,7 @@ export default function ForecastSubmitPage() {
                 <div className="text-[11px] uppercase tracking-widest font-medium" style={{ color: '#9CA3AF' }}>Previous submissions</div>
                 <div className="ml-auto text-xs" style={{ color: '#9CA3AF' }}>last {HISTORY_LIMIT}</div>
               </div>
-              <div className="max-h-[334px] overflow-y-auto">
+              <div>
                 {historyLoading ? (
                   <div className="flex items-center justify-center py-8"><Loader2 size={16} className="animate-spin" style={{ color: '#0E5C56' }} /></div>
                 ) : !projectId ? (
