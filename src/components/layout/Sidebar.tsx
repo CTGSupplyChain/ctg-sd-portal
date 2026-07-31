@@ -4,7 +4,7 @@ import { createClient } from '@/lib/supabase'
 import clsx from 'clsx'
 import {
   LayoutDashboard, Package, BarChart3, Bell, LogOut,
-  FileInput, RefreshCw, Database, TrendingUp, GitMerge, ClipboardList, Layers
+  FileInput, RefreshCw, Database, TrendingUp, GitMerge, ClipboardList, Layers, Send
 } from 'lucide-react'
 
 interface SidebarProps {
@@ -82,13 +82,20 @@ export default function Sidebar({ userEmail, userName, userRole, brands = [], ac
             onClick={() => router.push('/sales-history-upload')}
           />
         )}
-        {userRole === 'supply_chain' && (
+        <NavItem
+          icon={<Send size={15} />}
+          label="Submit Forecast"
+          href="/forecast-submit"
+          active={pathname === '/forecast-submit'}
+          onClick={() => router.push('/forecast-submit')}
+        />
+        {isAdmin && (
           <NavItem
             icon={<RefreshCw size={15} />}
-            label="Forecast Sync"
-            href="/forecast-sync"
-            active={pathname === '/forecast-sync'}
-            onClick={() => router.push('/forecast-sync')}
+            label="Forecast Log"
+            href="/forecast-log"
+            active={pathname === '/forecast-log'}
+            onClick={() => router.push('/forecast-log')}
           />
         )}
         {userRole === 'supply_chain' && (
