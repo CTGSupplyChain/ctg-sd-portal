@@ -12,7 +12,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
-import BackToSD from '@/components/layout/BackToSD'
+import Sidebar from '@/components/layout/Sidebar'
 import {
   Send, Eraser, AlertCircle, CheckCircle2, History, Copy, Loader2,
 } from 'lucide-react'
@@ -76,6 +76,8 @@ export default function ForecastSubmitPage() {
 
   const [ready, setReady] = useState(false)
   const [email, setEmail] = useState('')
+  const [profile, setProfile] = useState<{ email?: string; full_name?: string; role?: string } | null>(null)
+  const [navBrands, setNavBrands] = useState<string[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [projectId, setProjectId] = useState('')
   const [values, setValues] = useState<string[]>(Array(HORIZON).fill(''))
@@ -96,13 +98,17 @@ export default function ForecastSubmitPage() {
     ;(async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/login'); return }
-      const { data, error } = await supabase
-        .from('projects')
-        .select('id, project_name, brand, company')
-        .eq('status', 'Active')
-        .order('project_name')
+      const [{ data, error }, { data: prof }] = await Promise.all([
+        supabase.from('projects')
+          .select('id, project_name, brand, company')
+          .eq('status', 'Active')
+          .order('project_name'),
+        supabase.from('profiles').select('email, full_name, role').eq('id', session.user.id).single(),
+      ])
       if (cancelled) return
       setEmail(session.user.email || '')
+      setProfile(prof)
+      setNavBrands([...new Set((data || []).map(p => p.brand))].sort())
       if (error) setBanner({ kind: 'err', text: `Could not load projects: ${error.message}` })
       setProjects(data || [])
       setReady(true)
@@ -209,7 +215,10 @@ export default function ForecastSubmitPage() {
   }
 
   return (
-    <div className="min-h-screen" style={{ background: '#F4F2EE' }}>
+    <div className="flex h-screen overflow-hidden" style={{ background: '#F4F2EE' }}>
+      <Sidebar userEmail={profile?.email} userName={profile?.full_name}
+        userRole={profile?.role} brands={navBrands} />
+      <div className="flex-1 overflow-y-auto">
       <div className="max-w-6xl mx-auto px-6 py-7">
 
         {/* Header */}
@@ -223,7 +232,6 @@ export default function ForecastSubmitPage() {
               Submissions are stamped {weekCode}.
             </p>
           </div>
-          <BackToSD />
         </div>
 
         {banner && (
@@ -427,6 +435,7 @@ export default function ForecastSubmitPage() {
             </table>
           </div>
         )}
+      </div>
       </div>
     </div>
   )

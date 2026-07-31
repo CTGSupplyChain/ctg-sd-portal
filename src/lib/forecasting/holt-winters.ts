@@ -78,8 +78,11 @@ function toDateStr(d: Date): string {
   return d.toISOString().split('T')[0]
 }
 
-function toWkLabel(isoWeek: number): string {
-  return `WK${String(isoWeek).padStart(2, '0')}`
+function toWkLabel(isoYear: number, isoWeek: number): string {
+  // Year-qualified to match week_calendar.wk_label. A bare 'WK01' is ambiguous
+  // across the 2026-W53 / 2027-W01 boundary and was silently colliding in
+  // demand_forecast's Map<wk_label, qty> lookups.
+  return `${isoYear}-WK${String(isoWeek).padStart(2, '0')}`
 }
 
 // ── Holt's Linear (Damped Double Exponential Smoothing) ──────
@@ -650,7 +653,7 @@ export function generateForecast(
       isoYear,
       isoWeek,
       weekStartDate: toDateStr(monday),
-      wkLabel: toWkLabel(isoWeek),
+      wkLabel: toWkLabel(isoYear, isoWeek),
       forecastQty: Math.round(rawForecast[h]),
       lowerBound: lower[h],
       upperBound: upper[h],
