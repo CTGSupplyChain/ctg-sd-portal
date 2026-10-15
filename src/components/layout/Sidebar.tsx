@@ -3,9 +3,12 @@ import { useRouter, usePathname } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
 import clsx from 'clsx'
 import {
-  LayoutDashboard, Package, BarChart3, Bell, LogOut,
-  FileInput, RefreshCw, Database, TrendingUp, GitMerge, ClipboardList, Layers, Send
+  LayoutDashboard, BarChart3, Bell, LogOut,
+  RefreshCw, TrendingUp, GitMerge, Send
 } from 'lucide-react'
+
+// Brands shown under "My Projects". Temporarily limited to iLady; add names back to re-enable.
+const VISIBLE_BRANDS = ['ilady']
 
 interface SidebarProps {
   userEmail?: string
@@ -30,6 +33,7 @@ export default function Sidebar({ userEmail, userName, userRole, brands = [], ac
   }
 
   const isAdmin = userRole === 'admin' || userRole === 'supply_chain'
+  const visibleBrands = brands.filter(b => VISIBLE_BRANDS.includes(b.toLowerCase()))
 
   return (
     <div className="w-52 min-w-52 flex flex-col h-full" style={{ background: '#1F2937' }}>
@@ -55,24 +59,6 @@ export default function Sidebar({ userEmail, userName, userRole, brands = [], ac
         )}
 
         <div className="px-4 py-2 text-white/30 text-xs uppercase tracking-widest font-medium mt-1">Tools</div>
-        {(userRole === 'buyer' || isAdmin) && (
-          <NavItem
-            icon={<FileInput size={15} />}
-            label="Supply Input"
-            href="/supply-input"
-            active={pathname === '/supply-input'}
-            onClick={() => router.push('/supply-input')}
-          />
-        )}
-        {userRole === 'supply_chain' && (
-          <NavItem
-            icon={<Package size={15} />}
-            label="Inventory Upload"
-            href="/inventory-upload"
-            active={pathname === '/inventory-upload'}
-            onClick={() => router.push('/inventory-upload')}
-          />
-        )}
         {userRole === 'supply_chain' && (
           <NavItem
             icon={<TrendingUp size={15} />}
@@ -100,38 +86,11 @@ export default function Sidebar({ userEmail, userName, userRole, brands = [], ac
         )}
         {userRole === 'supply_chain' && (
           <NavItem
-            icon={<Database size={15} />}
-            label="Master SKU"
-            href="/master-sku"
-            active={pathname.startsWith('/master-sku')}
-            onClick={() => router.push('/master-sku')}
-          />
-        )}
-        {userRole === 'supply_chain' && (
-          <NavItem
             icon={<GitMerge size={15} />}
             label="PLM"
             href="/plm"
             active={pathname.startsWith('/plm')}
             onClick={() => router.push('/plm')}
-          />
-        )}
-        {userRole === 'supply_chain' && (
-          <NavItem
-            icon={<ClipboardList size={15} />}
-            label="Planned PO"
-            href="/planned-po"
-            active={pathname === '/planned-po'}
-            onClick={() => router.push('/planned-po')}
-          />
-        )}
-        {userRole === 'supply_chain' && (
-          <NavItem
-            icon={<Layers size={15} />}
-            label="Part Master"
-            href="/part-master"
-            active={pathname === '/part-master'}
-            onClick={() => router.push('/part-master')}
           />
         )}
         <NavItem
@@ -142,10 +101,10 @@ export default function Sidebar({ userEmail, userName, userRole, brands = [], ac
           onClick={() => router.push('/alerts')}
         />
 
-        {brands.length > 0 && (
+        {visibleBrands.length > 0 && (
           <>
             <div className="px-4 py-2 text-white/30 text-xs uppercase tracking-widest font-medium mt-1">My Projects</div>
-            {[...brands].sort((a, b) => a.localeCompare(b)).map(brand => (
+            {[...visibleBrands].sort((a, b) => a.localeCompare(b)).map(brand => (
               <NavItem
                 key={brand}
                 icon={<BarChart3 size={15} />}
