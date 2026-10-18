@@ -9,6 +9,14 @@ const NEEDS_ORDER = ['Stocked out', 'Below safety stock', 'Order now']
 
 const db = () => createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 const iso = (d: Date) => d.toISOString().slice(0, 10)
+// Next Monday 00:00 Malaysia time (UTC+8), as an ISO timestamp. On a Monday it means the following Monday.
+function nextMondayMyt(from = new Date()): string {
+  const my = new Date(from.getTime() + 8 * 3600 * 1000)          // wall clock in MYT, read via UTC getters
+  const dow = my.getUTCDay() || 7                                  // Mon=1 .. Sun=7
+  const days = 8 - dow
+  const target = new Date(Date.UTC(my.getUTCFullYear(), my.getUTCMonth(), my.getUTCDate() + days) - 8 * 3600 * 1000)
+  return target.toISOString()
+}
 const addDays = (d: Date, n: number) => { const x = new Date(d); x.setUTCDate(x.getUTCDate() + n); return x }
 
 export async function POST(req: NextRequest) {
@@ -27,14 +35,16 @@ export async function POST(req: NextRequest) {
 
     if (body.action === 'refresh') {
       const today = new Date()
-      const [{ data: params }, { data: open }, { data: covered }] = await Promise.all([
+      const [{ data: params }, { data: open }, { data: covered }, { data: snoozed }] = await Promise.all([
         s.from('v_inventory_params').select('sku, brand, moq, lead_time_wk, suggested_order_qty, status').in('status', NEEDS_ORDER).gt('suggested_order_qty', 0),
         s.from('po_release_lines').select('id, sku, suggested_qty, reason').eq('status', 'open'),
         // Converted lines whose ETA is still ahead are treated as covered: don't re-suggest.
         s.from('po_release_lines').select('sku').eq('status', 'converted').gte('eta', iso(today)),
+        // Dismissed lines stay hidden until their snooze (next Monday 00:00 MYT) has passed.
+        s.from('po_release_lines').select('sku').eq('status', 'dismissed').gt('snooze_until', now),
       ])
       const openBySku = new Map((open || []).map((o: any) => [o.sku, o]))
-      const coveredSkus = new Set((covered || []).map((c: any) => c.sku))
+      const coveredSkus = new Set([...(covered || []), ...(snoozed || [])].map((c: any) => c.sku))
       const inserts: any[] = []
       const updates: PromiseLike<any>[] = []
       for (const p of params || []) {
@@ -102,7 +112,7 @@ export async function POST(req: NextRequest) {
       if (!ref) return NextResponse.json({ error: 'PO number required' }, { status: 400 })
       patch = { ...patch, po_ref: ref, status: 'converted' }
     } else if (body.action === 'dismiss') {
-      patch = { ...patch, status: 'dismissed' }
+      patch = { ...patch, status: 'dismissed', snooze_until: nextMondayMyt() }
     } else return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
 
     const { error: ue } = await s.from('po_release_lines').update(patch).eq('id', id)

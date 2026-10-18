@@ -194,7 +194,7 @@ export default function PoReleasePage() {
                           <td style={{ ...td, whiteSpace: 'nowrap' }}>
                             {l.status === 'open' && editable && (<>
                               <button disabled={busy || !(refs[l.id] || '').trim()} onClick={() => act({ action: 'convert', id: l.id, po_ref: refs[l.id] })} style={{ ...inputStyle, cursor: 'pointer', background: '#0E5C56', color: '#fff', opacity: (refs[l.id] || '').trim() ? 1 : 0.4 }}>Mark converted</button>{' '}
-                              <button disabled={busy} onClick={() => act({ action: 'dismiss', id: l.id })} style={{ ...inputStyle, cursor: 'pointer' }}>Dismiss</button>
+                              <button disabled={busy} title="Hide until next Monday 00:00; returns then if the SKU still needs ordering" onClick={() => act({ action: 'dismiss', id: l.id })} style={{ ...inputStyle, cursor: 'pointer' }}>Dismiss</button>
                             </>)}
                           </td>
                         </tr>
