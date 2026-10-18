@@ -44,22 +44,25 @@ function getMonthSpans(weeks: WeekInfo[]) {
  * for a single SKU — no dropdown/selector. Used to stack one grid per SKU on
  * the brand page instead of gating all SKUs behind a single dropdown.
  */
-export function SDGrid({ current, weeks, currentWk, manualPo, onSavePo }: {
+export function SDGrid({ current, weeks, currentWk, manualPo, onSavePo, compact = false }: {
   current: SkuSdResult; weeks: WeekInfo[]; currentWk: string
   /** Manual open-PO qty by arrival week; presence of onSavePo makes the row editable. */
   manualPo?: Record<string, number>
   onSavePo?: (wkLabel: string, qty: number) => Promise<void>
+  /** Dense layout for stacked per-SKU cards: no legend, tighter cells, empty uncommit row hidden. */
+  compact?: boolean
 }) {
   const monthSpans = useMemo(() => getMonthSpans(weeks), [weeks])
   const hasBackorder = current.backorderQty > 0
+  const hasUncommit = current.weeks.some(w => w.supplyUncommit > 0)
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className={clsx('flex flex-col', compact ? 'gap-1' : 'gap-3', compact && 'sd-compact')}>
       <div className="border border-[#EAECF0] rounded-xl overflow-hidden overflow-x-auto">
-        <table className="text-xs border-collapse" style={{ minWidth: `${100 + weeks.length * 70}px` }}>
+        <table className="text-xs border-collapse" style={{ minWidth: `${compact ? 96 + weeks.length * 56 : 100 + weeks.length * 70}px` }}>
           <thead>
             <tr>
-              <th className="bg-[#F9FAFB] border-b border-r border-[#EAECF0] px-3 py-2 text-left text-[#667085] font-medium w-28 sticky left-0 z-10">Row</th>
+              <th className="bg-[#F9FAFB] border-b border-r border-[#EAECF0] px-3 py-2 text-left text-[#667085] font-medium w-28 sticky left-0 z-10 sd-row-label">Row</th>
               {monthSpans.map(span => (<th key={span.label} colSpan={span.count} className="bg-[#0E5C56] text-white text-center px-2 py-1.5 font-semibold border-r border-white/20 text-xs tracking-wide">{span.label}</th>))}
             </tr>
             <tr>
@@ -71,7 +74,7 @@ export function SDGrid({ current, weeks, currentWk, manualPo, onSavePo }: {
             <SDRow label="Forecast RM'000" values={current.weeks.map(w => fmtRm(w.forecastRm))} weeks={weeks} currentWk={currentWk} rowStyle="fcast" />
             <SDRow label="Forecast Qty" values={current.weeks.map(w => fmt(w.forecastQty))} weeks={weeks} currentWk={currentWk} rowStyle="qty" />
             {hasBackorder && (<SDRow label="Backorder" values={current.weeks.map(w => w.backorderQty > 0 ? fmt(w.backorderQty) : '—')} weeks={weeks} currentWk={currentWk} rowStyle="backorder" />)}
-            <SDRow label="Supply (Uncommit)" values={current.weeks.map(w => fmt(w.supplyUncommit))} weeks={weeks} currentWk={currentWk} rowStyle="uncommit" />
+            {(!compact || hasUncommit) && <SDRow label="Supply (Uncommit)" values={current.weeks.map(w => fmt(w.supplyUncommit))} weeks={weeks} currentWk={currentWk} rowStyle="uncommit" />}
             {onSavePo ? (
               <CommitEntryRow weeks={weeks} currentWk={currentWk}
                 totals={Object.fromEntries(current.weeks.map((w, i) => [weeks[i]?.label, w.supplyCommit]))}
@@ -84,7 +87,7 @@ export function SDGrid({ current, weeks, currentWk, manualPo, onSavePo }: {
         </table>
       </div>
 
-      <div className="flex gap-4 text-[10px] text-[#667085]">
+      {!compact && <div className="flex gap-4 text-[10px] text-[#667085]">
         {[
           { color: '#1F2937', label: 'Balance' },
           { color: '#0E5C56', label: 'Supply commit' },
@@ -94,7 +97,7 @@ export function SDGrid({ current, weeks, currentWk, manualPo, onSavePo }: {
         ].map(l => (
           <span key={l.label} className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: l.color, opacity: (l as any).opacity }}></span>{l.label}</span>
         ))}
-      </div>
+      </div>}
     </div>
   )
 }
@@ -242,5 +245,21 @@ function CommitEntryRow({ weeks, currentWk, totals, manual, onSave }: {
         )
       })}
     </tr>
+  )
+}
+
+export function SDLegend({ showBackorder = false }: { showBackorder?: boolean }) {
+  return (
+    <div className="flex gap-4 text-[10px] text-[#667085]">
+      {[
+        { color: '#1F2937', label: 'Balance' },
+        { color: '#0E5C56', label: 'Supply commit' },
+        { color: '#C5453F', label: 'Negative balance' },
+        { color: '#E8A33D', label: 'Current week', opacity: '0.7' },
+        ...(showBackorder ? [{ color: '#F59E0B', label: 'Backorder' }] : []),
+      ].map(l => (
+        <span key={l.label} className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: l.color, opacity: (l as any).opacity }}></span>{l.label}</span>
+      ))}
+    </div>
   )
 }
