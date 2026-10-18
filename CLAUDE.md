@@ -16,7 +16,7 @@ Vercel (Node 24)
 
 ## Workflow
 1. Branch from main → commit → push → open the Vercel preview URL and check the page.
-2. Merge to main only after SimpleJack sees the preview.
+2. Auto-merge (owner approved 18 Oct 2026): once typecheck + build pass and the branch preview is READY and checked, squash-merge the PR to main. Ask first only for irreversible/destructive data actions, role or security changes, or undecided product choices.
 3. Every schema change = a file in supabase/migrations, committed with its code.
    (Migrations applied before 18 Oct 2026 live only in supabase_migrations.schema_migrations — backfill pending.)
 4. Back up before any migration that alters or deletes data.
