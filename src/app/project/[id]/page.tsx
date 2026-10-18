@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
 import Sidebar from '@/components/layout/Sidebar'
-import { SDGrid } from '@/components/sd/SDTable'
+import { SDGrid, SDLegend } from '@/components/sd/SDTable'
 import ComponentSD from '@/components/sd/ComponentSD'
 import dynamic from 'next/dynamic'
 import { computeMRP } from '@/lib/bom-mrp'
@@ -432,7 +432,7 @@ export default function ProjectPage() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        <div className="flex-1 overflow-y-auto p-3 space-y-2">
           {loading ? (
             <div className="flex items-center justify-center h-40 text-sm" style={{ color: '#4B5563' }}>Loading S&D data...</div>
           ) : sortedSkus.length === 0 ? (
@@ -484,7 +484,9 @@ export default function ProjectPage() {
 
               {filteredSkus.length === 0 ? (
                 <div className="text-sm text-center py-8" style={{ color: '#4B5563' }}>No SKUs match "{searchQuery}"</div>
-              ) : filteredSkus.map(result => (
+              ) : (<>
+                <SDLegend />
+                {filteredSkus.map(result => (
                 <SkuCard
                   key={result.sku.sku}
                   result={result}
@@ -501,6 +503,7 @@ export default function ProjectPage() {
                   onSavePo={canEdit(profile?.role) ? (wk, qty) => savePo(result.sku.sku, wk, qty) : undefined}
                 />
               ))}
+              </>)}
             </>
           )}
         </div>
@@ -535,10 +538,10 @@ function SkuCard({
   return (
     <div className="bg-white rounded-xl overflow-hidden" style={{ border: '1px solid #E4DDD3' }}>
       {/* Header: SKU identity + KPIs */}
-      <div className="flex items-center justify-between gap-4 flex-wrap px-5 py-4" style={{ borderBottom: '1px solid #E4DDD3' }}>
+      <div className="flex items-center justify-between gap-3 flex-wrap px-3 py-1.5" style={{ borderBottom: '1px solid #E4DDD3' }}>
         <div className="flex items-center gap-2.5 min-w-0">
-          <span className="font-mono text-xs font-bold px-2 py-1 rounded flex-shrink-0" style={{ background: '#EEF0F4', color: '#3A4457' }}>{result.sku.sku}</span>
-          <span className="text-sm font-semibold truncate">{result.sku.description}</span>
+          <span className="font-mono text-[11px] font-bold px-1.5 py-0.5 rounded flex-shrink-0" style={{ background: '#EEF0F4', color: '#3A4457' }}>{result.sku.sku}</span>
+          <span className="text-[13px] font-semibold truncate">{result.sku.description}</span>
           <span className="text-xs flex-shrink-0" style={{ color: '#98A2B3' }}>
             {result.sku.uom || 'Unit'} · MOQ {(result.sku.moq || 0).toLocaleString()} · LT {result.sku.leadTimeWk || 0} wks
           </span>
@@ -548,7 +551,7 @@ function SkuCard({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-5 flex-shrink-0">
+        <div className="flex items-center gap-4 flex-shrink-0">
           <div className="text-right">
             <div className="text-[10px] uppercase tracking-wide" style={{ color: '#98A2B3' }}>On-hand</div>
             <div className="text-sm font-bold">{result.onHand.toLocaleString()}</div>
@@ -569,28 +572,25 @@ function SkuCard({
 
       {/* Inline alert, if any */}
       {result.flag !== 'OK' && (
-        <div className="flex items-start justify-between gap-3 px-5 py-2.5 text-xs" style={alertStyle[result.flag]}>
-          <p className="leading-relaxed">{getAlertMessage(result)}</p>
+        <div className="flex items-center justify-between gap-3 px-3 py-1 text-[11px]" style={alertStyle[result.flag]}>
+          <p className="truncate" title={getAlertMessage(result)}>{getAlertMessage(result)}</p>
           <span className="font-medium whitespace-nowrap cursor-pointer opacity-70 hover:opacity-100">View PO →</span>
         </div>
       )}
 
       {/* Weekly S&D grid — always visible */}
-      <div className="px-5 pt-4 pb-2">
-        <SDGrid current={result} weeks={weeks} currentWk={currentWk} manualPo={manualPo} onSavePo={onSavePo} />
+      <div className="px-3 pt-1.5 pb-1">
+        <SDGrid current={result} weeks={weeks} currentWk={currentWk} manualPo={manualPo} onSavePo={onSavePo} compact />
       </div>
 
       {/* Expand: BOM component orders + demand forecast + sales history */}
       <button
         onClick={onToggle}
-        className="w-full flex items-center gap-2 px-5 py-2.5 text-xs font-medium hover:bg-[#F9FAFB] transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-1 text-[11px] font-medium hover:bg-[#F9FAFB] transition-colors"
         style={{ borderTop: '1px solid #E4DDD3', color: '#4B5563' }}
       >
         {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         BOM & History
-        <span className="text-[10px] font-normal" style={{ color: '#98A2B3' }}>
-          — demand forecast chart, sales history, BOM component orders
-        </span>
       </button>
 
       {expanded && (
