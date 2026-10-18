@@ -41,11 +41,7 @@ export default function PoReleasePage() {
     const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single()
     setProfile(prof)
     if (!isStaff(prof?.role)) { router.push('/dashboard'); return }
-    // Show the latest suggestions on open: refresh once per visit before loading the list.
-    if (canBuy(prof?.role) && !autoRefreshed.current) {
-      autoRefreshed.current = true
-      try { await call({ action: 'refresh' }) } catch { /* list still loads below */ }
-    }
+
     const { data: b } = await supabase.from('master_sku').select('brand').neq('brand', '')
     setBrands([...new Set((b || []).map((x: any) => x.brand))] as string[])
     const { data: l } = await supabase.from('po_release_lines').select('*').in('status', ['open', 'converted']).order('order_date', { ascending: false })
@@ -55,6 +51,17 @@ export default function PoReleasePage() {
     ;(p || []).forEach((r: any) => { m[r.sku] = r })
     setCtx(m)
     setLoading(false)
+    // Show the latest suggestions on open: refresh once per visit in the background, then reload the list.
+    if (canBuy(prof?.role) && !autoRefreshed.current) {
+      autoRefreshed.current = true
+      setMsg('Updating suggestions…')
+      try {
+        await call({ action: 'refresh' })
+        const { data: l2 } = await supabase.from('po_release_lines').select('*').in('status', ['open', 'converted']).order('order_date', { ascending: false })
+        setLines((l2 || []) as Line[])
+        setMsg('')
+      } catch (e: any) { setMsg(`Could not update suggestions: ${e.message}`) }
+    }
   }
 
   async function call(payload: any) {

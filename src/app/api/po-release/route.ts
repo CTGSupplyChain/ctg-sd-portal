@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { canBuy } from '@/lib/roles'
 
+export const maxDuration = 30
+
 // PO release list actions: refresh | save | convert | dismiss. Staff (superadmin/admin/buyer) only.
 const NEEDS_ORDER = ['Stocked out', 'Below safety stock', 'Order now']
 
@@ -25,30 +27,39 @@ export async function POST(req: NextRequest) {
 
     if (body.action === 'refresh') {
       const today = new Date()
-      const { data: params } = await s.from('v_inventory_params')
-        .select('sku, brand, moq, lead_time_wk, suggested_order_qty, status').in('status', NEEDS_ORDER).gt('suggested_order_qty', 0)
-      const { data: open } = await s.from('po_release_lines').select('id, sku').eq('status', 'open')
-      // Converted lines whose ETA is still ahead are treated as covered: don't re-suggest.
-      const { data: covered } = await s.from('po_release_lines').select('sku').eq('status', 'converted').gte('eta', iso(today))
-      const openBySku = new Map((open || []).map((o: any) => [o.sku, o.id]))
+      const [{ data: params }, { data: open }, { data: covered }] = await Promise.all([
+        s.from('v_inventory_params').select('sku, brand, moq, lead_time_wk, suggested_order_qty, status').in('status', NEEDS_ORDER).gt('suggested_order_qty', 0),
+        s.from('po_release_lines').select('id, sku, suggested_qty, reason').eq('status', 'open'),
+        // Converted lines whose ETA is still ahead are treated as covered: don't re-suggest.
+        s.from('po_release_lines').select('sku').eq('status', 'converted').gte('eta', iso(today)),
+      ])
+      const openBySku = new Map((open || []).map((o: any) => [o.sku, o]))
       const coveredSkus = new Set((covered || []).map((c: any) => c.sku))
-      let added = 0, updated = 0
+      const inserts: any[] = []
+      const updates: PromiseLike<any>[] = []
       for (const p of params || []) {
         const sug = Math.round(Number(p.suggested_order_qty))
-        if (openBySku.has(p.sku)) {
-          await s.from('po_release_lines').update({ suggested_qty: sug, reason: p.status, updated_at: now }).eq('id', openBySku.get(p.sku))
-          updated++
+        const ex: any = openBySku.get(p.sku)
+        if (ex) {
+          if (ex.suggested_qty !== sug || ex.reason !== p.status) {
+            updates.push(s.from('po_release_lines').update({ suggested_qty: sug, reason: p.status, updated_at: now }).eq('id', ex.id).then(r => r))
+          }
         } else if (!coveredSkus.has(p.sku)) {
           const moq = Number(p.moq) || 0
-          const qty = moq > 0 ? Math.ceil(sug / moq) * moq : sug
-          const { error: e } = await s.from('po_release_lines').insert({
-            sku: p.sku, brand: p.brand, suggested_qty: sug, order_qty: qty, reason: p.status,
+          inserts.push({
+            sku: p.sku, brand: p.brand, suggested_qty: sug, order_qty: moq > 0 ? Math.ceil(sug / moq) * moq : sug, reason: p.status,
             order_date: iso(today), eta: iso(addDays(today, (Number(p.lead_time_wk) || 0) * 7)), updated_by: by,
           })
-          if (!e) added++
         }
       }
-      return NextResponse.json({ success: true, added, updated })
+      let added = 0
+      if (inserts.length) {
+        const { error: ie } = await s.from('po_release_lines').insert(inserts)
+        if (ie) return NextResponse.json({ error: ie.message }, { status: 500 })
+        added = inserts.length
+      }
+      await Promise.all(updates)
+      return NextResponse.json({ success: true, added, updated: updates.length })
     }
 
     if (body.action === 'import') {
