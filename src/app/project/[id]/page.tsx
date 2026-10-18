@@ -61,6 +61,11 @@ export default function ProjectPage() {
   const [searchQuery, setSearchQuery] = useState('')
   // Default view hides SKUs with no forecast demand and nothing flagged; the toggle reveals them.
   const [showAll, setShowAll] = useState(false)
+  // SKUs hidden by hand (master_sku.hidden_at); undo bar after hiding; Hidden list panel.
+  const [hiddenList, setHiddenList] = useState<{ sku: string; description: string }[]>([])
+  const [showHidden, setShowHidden] = useState(false)
+  const [undoSku, setUndoSku] = useState<string | null>(null)
+  const [hideErr, setHideErr] = useState('')
 
   const [bomFgParts, setBomFgParts] = useState<any[]>([])
   const [bomLinesAll, setBomLinesAll] = useState<any[]>([])
@@ -85,6 +90,17 @@ export default function ProjectPage() {
       body: JSON.stringify({ sku, receipt_wk: wk, qty }),
     })
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Save failed')
+    await loadAll(true)
+  }
+
+  async function setHidden(sku: string, hide: boolean) {
+    setHideErr('')
+    const { data: { user } } = await supabase.auth.getUser()
+    const { error } = await supabase.from('master_sku')
+      .update({ hidden_at: hide ? new Date().toISOString() : null, hidden_by: hide ? (user?.email ?? null) : null })
+      .eq('sku', sku)
+    if (error) { setHideErr(`Not saved: ${error.message}`); return }
+    setUndoSku(hide ? sku : null)
     await loadAll(true)
   }
 
@@ -120,7 +136,10 @@ export default function ProjectPage() {
     if (wkList.length > 0) CURRENT_WK = wkList[0].label
     setWeeks(wkList)
 
-    const { data: skuData } = await supabase.from('master_sku').select('*').eq('brand', brand).eq('status', 'Active')
+    const { data: skuAll } = await supabase.from('master_sku').select('*').eq('brand', brand).eq('status', 'Active')
+    // Manually hidden SKUs stay out of the S&D list and the alert counts; they can be restored from the Hidden list.
+    const skuData = (skuAll ?? []).filter((s: any) => !s.hidden_at)
+    setHiddenList((skuAll ?? []).filter((s: any) => s.hidden_at).map((s: any) => ({ sku: s.sku, description: s.description ?? '' })))
 
     const masterSkus: string[] = skuData?.map((s: any) => s.sku) || []
 
@@ -481,6 +500,11 @@ export default function ProjectPage() {
                     </button>
                   )}
                 </div>
+                {hiddenList.length > 0 && (
+                  <button onClick={() => setShowHidden(v => !v)} className="text-xs px-2.5 py-1 rounded-lg border border-[#E4DDD3] bg-white hover:bg-[#F4F2EE]" style={{ color: '#4B5563' }}>
+                    Hidden ({hiddenList.length}) {showHidden ? '▴' : '▾'}
+                  </button>
+                )}
                 {quietCount > 0 && (
                   <label className="flex items-center gap-2 text-xs cursor-pointer select-none" style={{ color: '#4B5563' }} title="SKUs with no forecast demand and no alert">
                     <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} />
@@ -493,6 +517,28 @@ export default function ProjectPage() {
                   </p>
                 )}
               </div>
+
+              {undoSku && (
+                <div className="flex items-center gap-3 text-xs px-3 py-1.5 rounded-lg" style={{ background: '#2E2A24', color: '#fff' }}>
+                  {undoSku} hidden — out of S&D, alerts and PO Release.
+                  <button onClick={() => setHidden(undoSku, false)} className="underline">Undo</button>
+                  <button onClick={() => setUndoSku(null)} className="ml-auto opacity-70" aria-label="Dismiss"><X size={12} /></button>
+                </div>
+              )}
+              {hideErr && <p className="text-xs" style={{ color: '#8C2A1E' }}>{hideErr}</p>}
+              {showHidden && hiddenList.length > 0 && (
+                <div className="bg-white rounded-lg p-3" style={{ border: '1px solid #E4DDD3' }}>
+                  <div className="text-xs font-semibold mb-1.5" style={{ color: '#1F2937' }}>Hidden SKUs</div>
+                  {hiddenList.map(h => (
+                    <div key={h.sku} className="flex items-center justify-between gap-3 text-xs py-1" style={{ borderTop: '1px solid #EFEAE2' }}>
+                      <span><b>{h.sku}</b> <span style={{ color: '#8B948F' }}>{h.description}</span></span>
+                      {canEdit(profile?.role) && (
+                        <button onClick={() => setHidden(h.sku, false)} className="px-2 py-0.5 rounded border border-[#E4DDD3] hover:bg-[#F4F2EE]" style={{ color: '#0F6E56' }}>Restore</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {filteredSkus.length === 0 ? (
                 <div className="text-sm text-center py-8" style={{ color: '#4B5563' }}>No SKUs match "{searchQuery}"</div>
@@ -513,6 +559,7 @@ export default function ProjectPage() {
                   brand={brand}
                   manualPo={manualPoBySku[result.sku.sku] ?? {}}
                   onSavePo={canEdit(profile?.role) ? (wk, qty) => savePo(result.sku.sku, wk, qty) : undefined}
+                  onHide={canEdit(profile?.role) ? () => setHidden(result.sku.sku, true) : undefined}
                 />
               ))}
               </>)}
@@ -528,7 +575,7 @@ export default function ProjectPage() {
 // history collapsed behind a per-SKU expander. ─────────────────────────────
 function SkuCard({
   result, weeks, currentWk, expanded, onToggle, mrpResults, fgPartNumber,
-  alertStyle, getAlertMessage, brand, manualPo, onSavePo,
+  alertStyle, getAlertMessage, brand, manualPo, onSavePo, onHide,
 }: {
   result: SkuSdResult
   weeks: WeekInfo[]
@@ -542,6 +589,7 @@ function SkuCard({
   brand: string
   manualPo: Record<string, number>
   onSavePo?: (wk: string, qty: number) => Promise<void>
+  onHide?: () => void
 }) {
   const flag = FLAG_DISPLAY[result.flag]
   const nextCommit = result.weeks.find(w => w.supplyCommit > 0)
@@ -579,6 +627,12 @@ function SkuCard({
           <span className="text-xs font-bold px-2.5 py-1 rounded-lg whitespace-nowrap" style={{ color: flag.color, background: result.flag === 'OK' ? '#DCEAE8' : '#FEF3E2' }}>
             {flag.emoji} {flag.label}
           </span>
+          {onHide && (
+            <button onClick={onHide} title="Hide this SKU from S&D, alerts and PO Release (restore from the Hidden list)"
+              className="text-[11px] px-2 py-1 rounded border border-[#E4DDD3] hover:bg-[#F4F2EE] whitespace-nowrap" style={{ color: '#4B5563' }}>
+              Hide
+            </button>
+          )}
         </div>
       </div>
 

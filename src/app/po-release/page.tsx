@@ -82,8 +82,10 @@ export default function PoReleasePage() {
     setBusy(false)
   }
 
-  const shown = useMemo(() => lines.filter(l => l.status === tab && (!fBrand || (l.brand || '').toLowerCase() === fBrand.toLowerCase())), [lines, tab, fBrand])
-  const openCount = lines.filter(l => l.status === 'open' && (!fBrand || (l.brand || '').toLowerCase() === fBrand.toLowerCase())).length
+  // Open lines for SKUs no longer in v_inventory_params (e.g. hidden SKUs) are not shown.
+  const inScope = (l: Line) => l.status !== 'open' || !!ctx[l.sku]
+  const shown = useMemo(() => lines.filter(l => inScope(l) && l.status === tab && (!fBrand || (l.brand || '').toLowerCase() === fBrand.toLowerCase())), [lines, tab, fBrand, ctx])
+  const openCount = lines.filter(l => inScope(l) && l.status === 'open' && (!fBrand || (l.brand || '').toLowerCase() === fBrand.toLowerCase())).length
   const editable = canBuy(profile?.role)
 
   async function importCsv(file: File) {
