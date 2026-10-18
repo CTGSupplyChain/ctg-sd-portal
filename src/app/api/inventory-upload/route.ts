@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { canEdit } from '@/lib/roles'
 
 export const maxDuration = 60
 export const dynamic = 'force-dynamic'
@@ -61,7 +62,7 @@ export async function POST(req: NextRequest) {
       .eq('id', user.id)
       .single()
 
-    if (profile?.role !== 'supply_chain') {
+    if (!canEdit(profile?.role)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 

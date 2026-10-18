@@ -8,6 +8,7 @@ import { computeMRP } from '@/lib/bom-mrp'
 import type { ComponentMaster, BomLine } from '@/lib/bom-mrp'
 import { loadDemandForecast } from '@/lib/forecasting/forecast-lookup'
 import { Download, RefreshCw, AlertTriangle, Clock } from 'lucide-react'
+import { isStaff } from '@/lib/roles'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -83,7 +84,7 @@ export default function PlannedPoPage() {
     setProfile(prof)
 
     // ── 1. Determine accessible brands ────────────────────────────────────────
-    const isAdmin = prof?.role === 'admin' || prof?.role === 'supply_chain'
+    const isAdmin = isStaff(prof?.role)
     let accessibleBrands: string[] = []
     if (isAdmin) {
       const { data: allSkus } = await supabase.from('master_sku').select('brand').neq('brand', '')

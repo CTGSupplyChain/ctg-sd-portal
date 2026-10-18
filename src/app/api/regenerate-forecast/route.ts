@@ -14,6 +14,7 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { canEdit } from '@/lib/roles'
 import {
   generateForecast, dateToIsoWeek,
   detectCycleLength, averageResidualsByCyclePosition, tileShapeOverHorizon, growthHybridBounds,
@@ -43,7 +44,7 @@ export async function POST(req: NextRequest) {
 
     const { data: profile } = await getSupabase()
       .from('profiles').select('role').eq('id', user.id).single()
-    if (!['admin', 'supply_chain'].includes(profile?.role ?? '')) {
+    if (!canEdit(profile?.role)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
