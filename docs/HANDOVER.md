@@ -17,7 +17,7 @@ Read this file first, then `CLAUDE.md` (rules), then `docs/SOW-v2.md` (scope). N
 
 - **Owner / decision maker:** SimpleJack = JiaJie Ong, `jiajie.ong@ctg4u.com`, Penang, Malaysia (UTC+8).
 - **Status:** left CTG; started a new job on 12 Oct 2026. Continues as a **contractor** to finish this portal. Target completion in the SOW was **18 Oct 2026** (the day of this handover). Free tiers only.
-- **How he wants to be worked with:** professional, direct, minimal small talk (ENTJ). Give structured results, not running commentary. Do not tie answers to his other work or field unless he asks. He decides; he approves every production merge explicitly ("push it to production", "go ahead and merge").
+- **How he wants to be worked with:** professional, direct, minimal small talk (ENTJ). Give structured results, not running commentary. Do not tie answers to his other work or field unless he asks. He decides. Until 18 Oct he approved every production merge explicitly; from 18 Oct 2026 he approved auto-merge (see §10).
 - **Expectation:** own the loop end to end — branch, commit, push, preview, (he checks), merge, production deploy, **verify the live page in Chrome**, report. Ask only when genuinely blocked or when a decision is irreversible.
 - He tests on Vercel preview URLs and the live site himself; if previews are awkward he asks for a standalone HTML mock-up instead.
 - Use SOW/own terminology: "S&D", "Supply (Commit)", "WOC", "PO Release", "Brand owner", "CTG Supply Chain view".
@@ -199,7 +199,7 @@ Older roadmaps still in the repo/memory (context, lower priority): `ROADMAP.md` 
 ## 10. Working agreement (workflow)
 
 1. Branch from `main` → commit → push → open the Vercel preview URL and check the page.
-2. **Merge to `main` only after SimpleJack has seen the preview and says so.** Squash merge.
+2. **Auto-merge (owner approved 18 Oct 2026):** once typecheck + build pass and the branch preview is READY and checked, squash-merge the PR to `main`. Ask first only for irreversible/destructive data actions, role/security changes, or undecided product choices. (Before this date the owner approved every merge explicitly.)
 3. Every schema change = a file in `supabase/migrations`, committed with its code.
 4. **Back up before any migration that alters or deletes data.** Prefer reversible changes (cancel/archive) over hard deletes.
 5. Run Supabase security advisors after DDL; no new ERROR findings.
