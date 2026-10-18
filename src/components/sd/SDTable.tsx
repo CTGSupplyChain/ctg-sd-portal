@@ -72,8 +72,13 @@ export function SDGrid({ current, weeks, currentWk, manualPo, onSavePo }: {
             <SDRow label="Forecast Qty" values={current.weeks.map(w => fmt(w.forecastQty))} weeks={weeks} currentWk={currentWk} rowStyle="qty" />
             {hasBackorder && (<SDRow label="Backorder" values={current.weeks.map(w => w.backorderQty > 0 ? fmt(w.backorderQty) : '—')} weeks={weeks} currentWk={currentWk} rowStyle="backorder" />)}
             <SDRow label="Supply (Uncommit)" values={current.weeks.map(w => fmt(w.supplyUncommit))} weeks={weeks} currentWk={currentWk} rowStyle="uncommit" />
-            {onSavePo && (<PoEntryRow weeks={weeks} currentWk={currentWk} values={manualPo || {}} onSave={onSavePo} />)}
-            <SDRow label="Supply (Commit)" values={current.weeks.map(w => fmt(w.supplyCommit))} weeks={weeks} currentWk={currentWk} rowStyle="commit" />
+            {onSavePo ? (
+              <CommitEntryRow weeks={weeks} currentWk={currentWk}
+                totals={Object.fromEntries(current.weeks.map((w, i) => [weeks[i]?.label, w.supplyCommit]))}
+                manual={manualPo || {}} onSave={onSavePo} />
+            ) : (
+              <SDRow label="Supply (Commit)" values={current.weeks.map(w => fmt(w.supplyCommit))} weeks={weeks} currentWk={currentWk} rowStyle="commit" />
+            )}
             <SDRow label="Balance" values={current.weeks.map(w => fmt(w.balance))} weeks={weeks} currentWk={currentWk} rowStyle="balance" balanceValues={current.weeks.map(w => w.balance)} />
           </tbody>
         </table>
@@ -218,18 +223,24 @@ function PoEntryCell({ wk, value, onSave }: { wk: string; value: number; onSave:
   )
 }
 
-function PoEntryRow({ weeks, currentWk, values, onSave }: {
-  weeks: WeekInfo[]; currentWk: string; values: Record<string, number>
+/** Editable Supply (Commit) row. Cell = total commit for the week; edits adjust the manual OPEN-<sku>-<wk> line by the difference, so uploaded POs are untouched. */
+function CommitEntryRow({ weeks, currentWk, totals, manual, onSave }: {
+  weeks: WeekInfo[]; currentWk: string; totals: Record<string, number>; manual: Record<string, number>
   onSave: (wk: string, qty: number) => Promise<void>
 }) {
   return (
     <tr>
-      <td className="px-3 py-1.5 font-medium text-xs border-b border-r border-[#EAECF0] sticky left-0 z-10 w-28 bg-[#EFF6FF] text-[#0E5C56]">Open PO (enter)</td>
-      {weeks.map(w => (
-        <td key={w.label} className={clsx('px-1 py-1 border-b border-r border-[#EAECF0]', w.label === currentWk ? 'bg-[#FEF3E2]' : 'bg-[#EFF6FF]')}>
-          <PoEntryCell wk={w.label} value={values[w.label] || 0} onSave={onSave} />
-        </td>
-      ))}
+      <td className="px-3 py-1.5 font-medium text-xs border-b border-r border-[#EAECF0] sticky left-0 z-10 w-28 bg-[#EFF6FF] text-[#4B5563]">Supply (Commit)</td>
+      {weeks.map(w => {
+        const total = totals[w.label] || 0
+        const man = manual[w.label] || 0
+        const other = total - man
+        return (
+          <td key={w.label} className={clsx('px-1 py-1 border-b border-r border-[#EAECF0]', w.label === currentWk ? 'bg-[#FEF3E2]' : 'bg-[#EFF6FF]')}>
+            <PoEntryCell wk={w.label} value={total} onSave={(wk, n) => onSave(wk, Math.max(0, n - other))} />
+          </td>
+        )
+      })}
     </tr>
   )
 }
