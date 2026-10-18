@@ -21,7 +21,7 @@ import { computeSD, FLAG_DISPLAY } from '@/lib/sd-compute'
 import type { SkuSdResult, WeekInfo } from '@/lib/sd-compute'
 import { loadDemandForecast } from '@/lib/forecasting/forecast-lookup'
 import { RefreshCw, Download, ChevronDown, ChevronRight, Search, X } from 'lucide-react'
-import { isStaff } from '@/lib/roles'
+import { isStaff, canEdit } from '@/lib/roles'
 
 function getCurrentMondayDate(): string {
   const now = new Date()
@@ -49,6 +49,8 @@ export default function ProjectPage() {
   const [lastUpdated, setLastUpdated] = useState<string>('')
   // How many of this brand's SKUs are showing a live WMS figure vs the last
   // Excel snapshot. Surfaced in the header so the number's provenance is visible.
+  // Manual open-PO qty by SKU -> arrival week (rows written by /api/open-po)
+  const [manualPoBySku, setManualPoBySku] = useState<Record<string, Record<string, number>>>({})
   const [liveSkus, setLiveSkus] = useState<{ live: number; total: number }>({ live: 0, total: 0 })
 
   // Which SKU's "BOM & History" panel is expanded — only one at a time to
@@ -73,10 +75,23 @@ export default function ProjectPage() {
     loadAll()
   }, [brand])
 
-  async function loadAll() {
-    setLoading(true)
-    setExpandedSku(null)
-    setMrpBySku({})
+  async function savePo(sku: string, wk: string, qty: number) {
+    const { data: { session } } = await supabase.auth.getSession()
+    const res = await fetch('/api/open-po', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token ?? ''}` },
+      body: JSON.stringify({ sku, receipt_wk: wk, qty }),
+    })
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Save failed')
+    await loadAll(true)
+  }
+
+  async function loadAll(silent = false) {
+    if (!silent) {
+      setLoading(true)
+      setExpandedSku(null)
+      setMrpBySku({})
+    }
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
@@ -166,6 +181,7 @@ export default function ProjectPage() {
     const skuList = skuData?.map((s: any) => s.sku) || []
     const demandForecastMap = await loadDemandForecast(skuList)
 
+    const manual: Record<string, Record<string, number>> = {}
     const results: SkuSdResult[] = (skuData || []).map((skuRaw: any) => {
       const sku = {
         sku: skuRaw.sku, description: skuRaw.description, brand: skuRaw.brand,
@@ -175,6 +191,12 @@ export default function ProjectPage() {
         demandSource: skuRaw.demand_source,
       }
       const skuSupply = supplyData?.filter((s: any) => s.sku === skuRaw.sku) || []
+      skuSupply.forEach((s: any) => {
+        if (String(s.po_number || '').startsWith('OPEN-') && s.receipt_wk) {
+          manual[skuRaw.sku] = manual[skuRaw.sku] || {}
+          manual[skuRaw.sku][s.receipt_wk] = (manual[skuRaw.sku][s.receipt_wk] || 0) + Math.max(s.balance_qty ?? s.qty ?? 0, 0)
+        }
+      })
       const commits: Record<string, number> = {}
       const uncommits: Record<string, number> = {}
       const wkLabels = new Set(wkList.map(w => w.label))
@@ -202,6 +224,7 @@ export default function ProjectPage() {
     })
 
     setSkuResults(results)
+    setManualPoBySku(manual)
 
     // ── BOM MRP raw data (MRP itself is computed lazily per-SKU on expand) ──
     if (allProjectIds.length > 0) {
@@ -403,7 +426,7 @@ export default function ProjectPage() {
             <button className="flex items-center gap-1.5 text-xs px-3 py-1.5 border border-[#E4DDD3] rounded-lg hover:bg-[#F4F2EE]" style={{ color: '#4B5563' }}>
               <Download size={12} /> Export
             </button>
-            <button onClick={loadAll} className="flex items-center gap-1.5 text-xs px-3 py-1.5 border border-[#E4DDD3] rounded-lg hover:bg-[#F4F2EE]" style={{ color: '#4B5563' }}>
+            <button onClick={() => loadAll()} className="flex items-center gap-1.5 text-xs px-3 py-1.5 border border-[#E4DDD3] rounded-lg hover:bg-[#F4F2EE]" style={{ color: '#4B5563' }}>
               <RefreshCw size={12} /> Refresh
             </button>
           </div>
@@ -474,6 +497,8 @@ export default function ProjectPage() {
                   alertStyle={alertStyle}
                   getAlertMessage={getAlertMessage}
                   brand={brand}
+                  manualPo={manualPoBySku[result.sku.sku] ?? {}}
+                  onSavePo={canEdit(profile?.role) ? (wk, qty) => savePo(result.sku.sku, wk, qty) : undefined}
                 />
               ))}
             </>
@@ -488,7 +513,7 @@ export default function ProjectPage() {
 // history collapsed behind a per-SKU expander. ─────────────────────────────
 function SkuCard({
   result, weeks, currentWk, expanded, onToggle, mrpResults, fgPartNumber,
-  alertStyle, getAlertMessage, brand,
+  alertStyle, getAlertMessage, brand, manualPo, onSavePo,
 }: {
   result: SkuSdResult
   weeks: WeekInfo[]
@@ -500,6 +525,8 @@ function SkuCard({
   alertStyle: Record<string, React.CSSProperties>
   getAlertMessage: (s: SkuSdResult) => string
   brand: string
+  manualPo: Record<string, number>
+  onSavePo?: (wk: string, qty: number) => Promise<void>
 }) {
   const flag = FLAG_DISPLAY[result.flag]
   const nextCommit = result.weeks.find(w => w.supplyCommit > 0)
@@ -550,7 +577,7 @@ function SkuCard({
 
       {/* Weekly S&D grid — always visible */}
       <div className="px-5 pt-4 pb-2">
-        <SDGrid current={result} weeks={weeks} currentWk={currentWk} />
+        <SDGrid current={result} weeks={weeks} currentWk={currentWk} manualPo={manualPo} onSavePo={onSavePo} />
       </div>
 
       {/* Expand: BOM component orders + demand forecast + sales history */}
