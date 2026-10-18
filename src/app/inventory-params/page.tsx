@@ -16,7 +16,7 @@ interface Row {
   cv_lt: number; cv_source: string; segment: string; z: number
   safety_stock: number; rop_min: number; max_level: number; eoq: number
   usable: number; incoming: number; stock_position: number; snapshot_date: string | null
-  woc_usable: number | null; suggested_order_qty: number; status: string; sales_through: string | null
+  woc_usable: number | null; target_woc: number | null; suggested_order_qty: number; status: string; sales_through: string | null
 }
 interface Policy {
   z_a: number; z_b: number; z_c: number; cv_cap: number; default_cv: number; min_history_wk: number
@@ -115,6 +115,14 @@ export default function InventoryParamsPage() {
     await refresh()
   }
 
+  async function saveMaster(sku: string, field: 'lead_time_wk' | 'moq', value: number) {
+    setMsg('')
+    const { error } = await supabase.from('master_sku').update({ [field]: value }).eq('sku', sku)
+    if (error) { setMsg(`Not saved: ${error.message}`); return }
+    setMsg(`Saved ${sku} ${field === 'moq' ? 'MOQ' : 'lead time'} — parameters recalculated.`)
+    await refresh()
+  }
+
   const allBrands = useMemo(() => Array.from(new Set(rows.map(r => r.brand))).sort(), [rows])
   const visible = useMemo(() => rows
     .filter(r => !fBrand || r.brand === fBrand)
@@ -134,7 +142,7 @@ export default function InventoryParamsPage() {
   const stockDate = rows.find(r => r.snapshot_date)?.snapshot_date
 
   function exportCsv() {
-    const cols: (keyof Row)[] = ['sku', 'description', 'segment', 'lead_time_wk', 'moq', 'run_rate_wk', 'forecast_wk', 'planning_wk', 'cv_lt', 'safety_stock', 'rop_min', 'max_level', 'eoq', 'usable', 'incoming', 'woc_usable', 'suggested_order_qty', 'status']
+    const cols: (keyof Row)[] = ['sku', 'description', 'segment', 'lead_time_wk', 'moq', 'run_rate_wk', 'forecast_wk', 'planning_wk', 'cv_lt', 'safety_stock', 'rop_min', 'max_level', 'eoq', 'target_woc', 'suggested_order_qty', 'status']
     const esc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`
     const csv = [cols.join(','), ...visible.map(r => cols.map(c => esc(r[c])).join(','))].join('\n')
     const a = document.createElement('a')
@@ -191,8 +199,8 @@ export default function InventoryParamsPage() {
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                     <thead>
                       <tr style={{ textAlign: 'right', color: '#4B5563', fontSize: 11 }}>
-                        {['SKU', 'Seg', 'LT wk', 'MOQ', 'Run rate /wk', 'Forecast /wk', 'Plan /wk', 'CV (LT)', 'Safety stock', 'ROP (min)', 'Max', 'EOQ', 'Usable', 'Incoming', 'WOC', 'Suggested order', 'Status'].map((h, i) => (
-                          <th key={h} style={{ ...th, textAlign: i < 2 || i === 16 ? 'left' : 'right' }}>{h}</th>
+                        {['SKU', 'Seg', 'LT wk', 'MOQ', 'Run rate /wk', 'Forecast /wk', 'Plan /wk', 'CV (LT)', 'Safety stock', 'ROP (min)', 'Max', 'EOQ', 'Target WOC', 'Suggested order', 'Status'].map((h, i) => (
+                          <th key={h} style={{ ...th, textAlign: i < 2 || i === 15 ? 'left' : 'right' }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -206,8 +214,12 @@ export default function InventoryParamsPage() {
                               <div style={{ fontSize: 11, color: '#8B948F' }}>{(r.description ?? '').replace(/^I-ProCare,\s*/i, '')}</div>
                             </td>
                             <td style={{ ...td, textAlign: 'left' }}>{r.segment}</td>
-                            <td style={td}>{r.lead_time_wk}</td>
-                            <td style={td}>{n0(r.moq)}</td>
+                            <td style={td}>{editor
+                              ? <MasterInput value={r.lead_time_wk} width={52} onSave={v => saveMaster(r.sku, 'lead_time_wk', v)} />
+                              : r.lead_time_wk}</td>
+                            <td style={td}>{editor
+                              ? <MasterInput value={r.moq} width={80} onSave={v => saveMaster(r.sku, 'moq', v)} />
+                              : n0(r.moq)}</td>
                             <td style={td}>{n0(r.run_rate_wk)}</td>
                             <td style={td}>{n0(r.forecast_wk)}</td>
                             <td style={{ ...td, fontWeight: 600 }}>{n0(r.planning_wk)}</td>
@@ -218,9 +230,7 @@ export default function InventoryParamsPage() {
                             <td style={td}>{n0(r.rop_min)}</td>
                             <td style={td}>{n0(r.max_level)}</td>
                             <td style={td}>{n0(r.eoq)}</td>
-                            <td style={td}>{n0(r.usable)}</td>
-                            <td style={td}>{n0(r.incoming)}</td>
-                            <td style={td}>{r.woc_usable == null ? '—' : r.woc_usable > 99 ? '99+' : n1(r.woc_usable)}</td>
+                            <td style={td} title="Weeks of cover the max level represents: (lead time + review) plus safety stock">{r.target_woc == null ? '—' : n1(r.target_woc)}</td>
                             <td style={{ ...td, fontWeight: r.suggested_order_qty > 0 ? 600 : 400 }}>{r.suggested_order_qty > 0 ? n0(r.suggested_order_qty) : '—'}</td>
                             <td style={{ ...td, textAlign: 'left' }}>
                               <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, border: `1px solid ${tone.bd}`, background: tone.bg, color: tone.fg, whiteSpace: 'nowrap' }}>{r.status}</span>
@@ -229,7 +239,7 @@ export default function InventoryParamsPage() {
                         )
                       })}
                       {visible.length === 0 && (
-                        <tr><td colSpan={17} style={{ ...td, textAlign: 'center', color: '#8B948F', padding: 24 }}>No SKUs match.</td></tr>
+                        <tr><td colSpan={15} style={{ ...td, textAlign: 'center', color: '#8B948F', padding: 24 }}>No SKUs match.</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -237,7 +247,7 @@ export default function InventoryParamsPage() {
                 <div style={{ fontSize: 11, color: '#8B948F', marginTop: 10, lineHeight: 1.5 }}>
                   SS = √((z·CV<sub>LT</sub>·μ·LT)² + (z·μ·σ<sub>LT</sub>)²) · ROP = μ·LT + SS · Max = μ·(LT + review) + SS · EOQ floored at MOQ.
                   Service level by ABC (A {policy?.z_a} · B {policy?.z_b} · C {policy?.z_c} z). * = default CV (fewer than {policy?.min_history_wk} weeks with sales).
-                  Stock position = usable + incoming in WMS. Suggested order rounds up to MOQ and is zero above ROP.
+                  LT and MOQ are editable (admin) and recalculate on save. Suggested order rounds up to MOQ and is zero above ROP.
                   Retired pack SKUs (bottle → box) are excluded; they remain kit components.
                 </div>
               </Card>
@@ -297,5 +307,20 @@ function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; chi
     <div onClick={onClick} style={{ fontSize: 11, padding: '3px 9px', border: '1px solid', borderRadius: 999, cursor: 'pointer', userSelect: 'none', background: on ? '#2E2A24' : '#fff', borderColor: on ? '#2E2A24' : '#E4DDD3', color: on ? '#fff' : '#4B5563' }}>
       {children}
     </div>
+  )
+}
+
+function MasterInput({ value, width, onSave }: { value: number; width: number; onSave: (v: number) => void }) {
+  const [v, setV] = useState(String(value))
+  useEffect(() => { setV(String(value)) }, [value])
+  const commit = () => {
+    const n = Math.round(Number(v))
+    if (!Number.isFinite(n) || n < 0 || v.trim() === '') { setV(String(value)); return }
+    if (n !== value) onSave(n)
+  }
+  return (
+    <input type="number" min={0} value={v} onChange={e => setV(e.target.value)} onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+      style={{ ...inputStyle, width, textAlign: 'right', padding: '2px 5px' }} />
   )
 }
