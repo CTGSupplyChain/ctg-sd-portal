@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 
 // Brands shown under "My Projects". Temporarily limited to iLady; add names back to re-enable.
-const VISIBLE_BRANDS = ['ilady']
+const VISIBLE_BRANDS = ['ilady', 'skindae', 'kata']
 
 interface SidebarProps {
   userEmail?: string

@@ -59,6 +59,8 @@ export default function ProjectPage() {
 
   // SKU search — filters the list below by SKU code or description
   const [searchQuery, setSearchQuery] = useState('')
+  // Default view hides SKUs with no forecast demand and nothing flagged; the toggle reveals them.
+  const [showAll, setShowAll] = useState(false)
 
   const [bomFgParts, setBomFgParts] = useState<any[]>([])
   const [bomLinesAll, setBomLinesAll] = useState<any[]>([])
@@ -382,14 +384,18 @@ export default function ProjectPage() {
     [...skuResults].sort((a, b) => (a.sku.description || '').localeCompare(b.sku.description || '')),
     [skuResults])
 
+  const isQuiet = (r: SkuSdResult) => r.flag === 'OK' && !r.weeks.some(w => w.forecastQty > 0)
+  const quietCount = useMemo(() => sortedSkus.filter(isQuiet).length, [sortedSkus])
+
   const filteredSkus = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
-    if (!q) return sortedSkus
+    // A search looks through every SKU, hidden or not.
+    if (!q) return showAll ? sortedSkus : sortedSkus.filter(r => !isQuiet(r))
     return sortedSkus.filter(r =>
       r.sku.sku.toLowerCase().includes(q) ||
       (r.sku.description || '').toLowerCase().includes(q)
     )
-  }, [sortedSkus, searchQuery])
+  }, [sortedSkus, searchQuery, showAll])
 
   const flaggedCount = skuResults.filter(s => s.flag !== 'OK').length
 
@@ -443,7 +449,7 @@ export default function ProjectPage() {
                 <div>
                   <h2 className="text-sm font-semibold" style={{ color: '#1F2937', fontFamily: 'Cambria, Georgia, serif' }}>All SKUs — Weekly Supply & Demand</h2>
                   <p className="text-xs mt-0.5" style={{ color: '#4B5563' }}>
-                    Rolling 52 weeks from {CURRENT_WK} · {sortedSkus.length} SKUs · scroll to review each, expand "BOM &amp; History" for component-level detail
+                    Rolling 52 weeks from {CURRENT_WK} · {showAll ? sortedSkus.length : sortedSkus.length - quietCount} of {sortedSkus.length} SKUs · scroll to review each, expand "BOM &amp; History" for component-level detail
                   </p>
                 </div>
                 {flaggedCount > 0 && (
@@ -453,8 +459,8 @@ export default function ProjectPage() {
                 )}
               </div>
 
-              <div>
-                <div className="relative max-w-md">
+              <div className="flex items-center gap-4 flex-wrap">
+                <div className="relative max-w-md w-full">
                   <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#9CA3AF' }} />
                   <input
                     type="text"
@@ -475,8 +481,14 @@ export default function ProjectPage() {
                     </button>
                   )}
                 </div>
+                {quietCount > 0 && (
+                  <label className="flex items-center gap-2 text-xs cursor-pointer select-none" style={{ color: '#4B5563' }} title="SKUs with no forecast demand and no alert">
+                    <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} />
+                    Show all SKUs <span style={{ color: '#98A2B3' }}>({quietCount} with no demand hidden)</span>
+                  </label>
+                )}
                 {searchQuery && (
-                  <p className="text-xs mt-1.5" style={{ color: '#4B5563' }}>
+                  <p className="text-xs" style={{ color: '#4B5563' }}>
                     Matching {filteredSkus.length} of {sortedSkus.length} SKUs
                   </p>
                 )}
