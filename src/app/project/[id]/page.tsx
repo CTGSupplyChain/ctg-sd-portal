@@ -21,6 +21,7 @@ import { computeSD, FLAG_DISPLAY } from '@/lib/sd-compute'
 import type { SkuSdResult, WeekInfo } from '@/lib/sd-compute'
 import { loadDemandForecast } from '@/lib/forecasting/forecast-lookup'
 import { RefreshCw, Download, ChevronDown, ChevronRight, Search, X } from 'lucide-react'
+import { isStaff } from '@/lib/roles'
 
 function getCurrentMondayDate(): string {
   const now = new Date()
@@ -82,7 +83,7 @@ export default function ProjectPage() {
     const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single()
     setProfile(prof)
 
-    const isAdmin = prof?.role === 'admin' || prof?.role === 'supply_chain'
+    const isAdmin = isStaff(prof?.role)
     if (isAdmin) {
       const { data: allSkus } = await supabase.from('master_sku').select('brand').neq('brand', '')
       const uniqueBrands = [...new Set(allSkus?.map((s: any) => s.brand) || [])]

@@ -2,10 +2,14 @@
 import { useRouter, usePathname } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
 import clsx from 'clsx'
+import { isStaff, canEdit, roleLabel } from '@/lib/roles'
 import {
-  LayoutDashboard, Package, BarChart3, Bell, LogOut,
-  FileInput, RefreshCw, Database, TrendingUp, GitMerge, ClipboardList, Layers, Send
+  LayoutDashboard, BarChart3, Bell, LogOut,
+  RefreshCw, TrendingUp, GitMerge, Send, SlidersHorizontal
 } from 'lucide-react'
+
+// Brands shown under "My Projects". Temporarily limited to iLady; add names back to re-enable.
+const VISIBLE_BRANDS = ['ilady']
 
 interface SidebarProps {
   userEmail?: string
@@ -29,7 +33,9 @@ export default function Sidebar({ userEmail, userName, userRole, brands = [], ac
     router.push('/login')
   }
 
-  const isAdmin = userRole === 'admin' || userRole === 'supply_chain'
+  const staff = isStaff(userRole)
+  const editor = canEdit(userRole)
+  const visibleBrands = brands.filter(b => VISIBLE_BRANDS.includes(b.toLowerCase()))
 
   return (
     <div className="w-52 min-w-52 flex flex-col h-full" style={{ background: '#1F2937' }}>
@@ -41,39 +47,24 @@ export default function Sidebar({ userEmail, userName, userRole, brands = [], ac
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto py-2">
-        {isAdmin && (
-          <>
-            <div className="px-4 py-2 text-white/30 text-xs uppercase tracking-widest font-medium">Overview</div>
-            <NavItem
-              icon={<LayoutDashboard size={15} />}
-              label="Dashboard"
-              href="/dashboard"
-              active={pathname === '/dashboard'}
-              onClick={() => router.push('/dashboard')}
-            />
-          </>
-        )}
+        <div className="px-4 py-2 text-white/30 text-xs uppercase tracking-widest font-medium">{staff ? 'Overview' : 'My Brand'}</div>
+        <NavItem
+          icon={<LayoutDashboard size={15} />}
+          label="Inventory Health"
+          href="/dashboard"
+          active={pathname === '/dashboard'}
+          onClick={() => router.push('/dashboard')}
+        />
+        <NavItem
+          icon={<SlidersHorizontal size={15} />}
+          label="Inventory Parameters"
+          href="/inventory-params"
+          active={pathname === '/inventory-params'}
+          onClick={() => router.push('/inventory-params')}
+        />
 
         <div className="px-4 py-2 text-white/30 text-xs uppercase tracking-widest font-medium mt-1">Tools</div>
-        {(userRole === 'buyer' || isAdmin) && (
-          <NavItem
-            icon={<FileInput size={15} />}
-            label="Supply Input"
-            href="/supply-input"
-            active={pathname === '/supply-input'}
-            onClick={() => router.push('/supply-input')}
-          />
-        )}
-        {userRole === 'supply_chain' && (
-          <NavItem
-            icon={<Package size={15} />}
-            label="Inventory Upload"
-            href="/inventory-upload"
-            active={pathname === '/inventory-upload'}
-            onClick={() => router.push('/inventory-upload')}
-          />
-        )}
-        {userRole === 'supply_chain' && (
+        {editor && (
           <NavItem
             icon={<TrendingUp size={15} />}
             label="Sales History"
@@ -89,7 +80,7 @@ export default function Sidebar({ userEmail, userName, userRole, brands = [], ac
           active={pathname === '/forecast-submit'}
           onClick={() => router.push('/forecast-submit')}
         />
-        {isAdmin && (
+        {staff && (
           <NavItem
             icon={<RefreshCw size={15} />}
             label="Forecast Log"
@@ -98,16 +89,7 @@ export default function Sidebar({ userEmail, userName, userRole, brands = [], ac
             onClick={() => router.push('/forecast-log')}
           />
         )}
-        {userRole === 'supply_chain' && (
-          <NavItem
-            icon={<Database size={15} />}
-            label="Master SKU"
-            href="/master-sku"
-            active={pathname.startsWith('/master-sku')}
-            onClick={() => router.push('/master-sku')}
-          />
-        )}
-        {userRole === 'supply_chain' && (
+        {editor && (
           <NavItem
             icon={<GitMerge size={15} />}
             label="PLM"
@@ -116,36 +98,11 @@ export default function Sidebar({ userEmail, userName, userRole, brands = [], ac
             onClick={() => router.push('/plm')}
           />
         )}
-        {userRole === 'supply_chain' && (
-          <NavItem
-            icon={<ClipboardList size={15} />}
-            label="Planned PO"
-            href="/planned-po"
-            active={pathname === '/planned-po'}
-            onClick={() => router.push('/planned-po')}
-          />
-        )}
-        {userRole === 'supply_chain' && (
-          <NavItem
-            icon={<Layers size={15} />}
-            label="Part Master"
-            href="/part-master"
-            active={pathname === '/part-master'}
-            onClick={() => router.push('/part-master')}
-          />
-        )}
-        <NavItem
-          icon={<Bell size={15} />}
-          label="Alerts"
-          href="/alerts"
-          active={pathname === '/alerts'}
-          onClick={() => router.push('/alerts')}
-        />
 
-        {brands.length > 0 && (
+        {visibleBrands.length > 0 && (
           <>
             <div className="px-4 py-2 text-white/30 text-xs uppercase tracking-widest font-medium mt-1">My Projects</div>
-            {[...brands].sort((a, b) => a.localeCompare(b)).map(brand => (
+            {[...visibleBrands].sort((a, b) => a.localeCompare(b)).map(brand => (
               <NavItem
                 key={brand}
                 icon={<BarChart3 size={15} />}
@@ -167,7 +124,7 @@ export default function Sidebar({ userEmail, userName, userRole, brands = [], ac
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-white text-xs font-medium truncate">{userName || userEmail}</div>
-            <div className="text-white/40 text-xs truncate capitalize">{userRole?.replace('_', ' ')}</div>
+            <div className="text-white/40 text-xs truncate capitalize">{roleLabel(userRole)}</div>
           </div>
           <button onClick={handleLogout} className="text-white/30 hover:text-white/70 transition-colors">
             <LogOut size={14} />

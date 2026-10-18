@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import * as XLSX from 'xlsx'
+import { canBuy } from '@/lib/roles'
 
 // ============================================================
 // Component (RM/PK/SA/WIP) Purchase Orders — mirrors
@@ -77,7 +78,7 @@ export async function PATCH(req: NextRequest) {
     if (authError || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { data: profile } = await getSupabase().from('profiles').select('role').eq('id', user.id).single()
-    if (profile?.role !== 'supply_chain') return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    if (!canBuy(profile?.role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
     const body = await req.json()
     const { id, ...fields } = body
@@ -140,7 +141,7 @@ export async function POST(req: NextRequest) {
     if (authError || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { data: profile } = await getSupabase().from('profiles').select('role').eq('id', user.id).single()
-    if (profile?.role !== 'supply_chain') return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    if (!canBuy(profile?.role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
     // Parse file
     const formData = await req.formData()

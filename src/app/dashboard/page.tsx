@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase'
 import Sidebar from '@/components/layout/Sidebar'
 import { useRouter } from 'next/navigation'
+import { isStaff, isBrandOwner } from '@/lib/roles'
 
 // ── constants ────────────────────────────────────────────────────────────────
 // Order-window buffer and excess line are fixed constants, not UI controls —
@@ -119,20 +120,14 @@ export default function DashboardPage() {
     const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single()
     setProfile(prof)
 
-    const isAdmin = prof?.role === 'admin' || prof?.role === 'supply_chain'
-    if (!isAdmin) {
-      // Brand owners have no dashboard. Route to their own brand's S&D view,
-      // or to the forecast form if no brand is assigned yet. Previously this
-      // was hardcoded to '/project/SkinDae', which sent every non-admin into
-      // another brand's page where RLS then blanked it out.
-      const { data: access } = await supabase
-        .from('user_brand_access')
-        .select('brand')
-        .eq('user_id', user.id)
-        .order('brand')
-      const firstBrand = access?.[0]?.brand
-      router.push(firstBrand ? `/project/${encodeURIComponent(firstBrand)}` : '/forecast-submit')
+    // Staff see every brand; brand owners see their own brand (RLS scopes the rows).
+    if (!isStaff(prof?.role) && !isBrandOwner(prof?.role)) {
+      router.push('/forecast-submit')
       return
+    }
+    if (isBrandOwner(prof?.role)) {
+      const { data: access } = await supabase.from('user_brand_access').select('brand').eq('user_id', user.id)
+      setBrands((access ?? []).map((a: any) => a.brand))
     }
 
     const [skuRes, stockRes, wmsLiveRes, poRes, forecastRes, feedRes, bomRes] = await Promise.all([
@@ -380,7 +375,7 @@ export default function DashboardPage() {
       <div className="flex-1 flex flex-col overflow-hidden">
         <div style={{ background: '#FFFFFF', borderBottom: '1px solid #E4DDD3', padding: '10px 24px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: '#1F2937', letterSpacing: '-0.01em', fontFamily: 'Cambria, Georgia, serif' }}>Inventory Management Control Tower</div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: '#1F2937', letterSpacing: '-0.01em', fontFamily: 'Cambria, Georgia, serif' }}>Inventory Health</div>
             <div style={{ fontSize: 11.5, color: '#4B5563', marginTop: 2 }}>
               {allClassified.length} active SKUs · live WMS stock for {liveCount} of {allClassified.length} SKUs
             </div>

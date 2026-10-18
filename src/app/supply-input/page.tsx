@@ -5,6 +5,7 @@ import { createBrowserClient } from '@supabase/ssr'
 import { useRouter } from 'next/navigation'
 import { Upload, FileSpreadsheet, AlertCircle, CheckCircle, Search, RefreshCw, Check, X, RefreshCcw } from 'lucide-react'
 import BackToSD from '@/components/layout/BackToSD'
+import { canBuy } from '@/lib/roles'
 
 interface UploadResult {
   success: boolean
@@ -721,7 +722,7 @@ export default function SupplyInputPage() {
       <div className="mt-10">
         <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
       {/* ───────────── Sync from Sheet (supply_chain only) ───────────── */}
-      {role === 'supply_chain' && (
+      {canBuy(role) && (
         <div className="mt-8 bg-[#F4F2EE] border border-[#E4DDD3] rounded-xl px-4 py-4">
           <div className="flex items-center justify-between flex-wrap gap-3">
             <div>
