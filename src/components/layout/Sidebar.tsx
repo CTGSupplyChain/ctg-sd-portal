@@ -63,6 +63,16 @@ export default function Sidebar({ userEmail, userName, userRole, brands = [], ac
           onClick={() => router.push('/inventory-params')}
         />
 
+        {staff && (
+          <NavItem
+            icon={<Send size={15} />}
+            label="PO Release"
+            href="/po-release"
+            active={pathname === '/po-release'}
+            onClick={() => router.push('/po-release')}
+          />
+        )}
+
         <div className="px-4 py-2 text-white/30 text-xs uppercase tracking-widest font-medium mt-1">Tools</div>
         {editor && (
           <NavItem

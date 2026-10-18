@@ -44,8 +44,11 @@ function getMonthSpans(weeks: WeekInfo[]) {
  * for a single SKU — no dropdown/selector. Used to stack one grid per SKU on
  * the brand page instead of gating all SKUs behind a single dropdown.
  */
-export function SDGrid({ current, weeks, currentWk }: {
+export function SDGrid({ current, weeks, currentWk, manualPo, onSavePo }: {
   current: SkuSdResult; weeks: WeekInfo[]; currentWk: string
+  /** Manual open-PO qty by arrival week; presence of onSavePo makes the row editable. */
+  manualPo?: Record<string, number>
+  onSavePo?: (wkLabel: string, qty: number) => Promise<void>
 }) {
   const monthSpans = useMemo(() => getMonthSpans(weeks), [weeks])
   const hasBackorder = current.backorderQty > 0
@@ -69,7 +72,13 @@ export function SDGrid({ current, weeks, currentWk }: {
             <SDRow label="Forecast Qty" values={current.weeks.map(w => fmt(w.forecastQty))} weeks={weeks} currentWk={currentWk} rowStyle="qty" />
             {hasBackorder && (<SDRow label="Backorder" values={current.weeks.map(w => w.backorderQty > 0 ? fmt(w.backorderQty) : '—')} weeks={weeks} currentWk={currentWk} rowStyle="backorder" />)}
             <SDRow label="Supply (Uncommit)" values={current.weeks.map(w => fmt(w.supplyUncommit))} weeks={weeks} currentWk={currentWk} rowStyle="uncommit" />
-            <SDRow label="Supply (Commit)" values={current.weeks.map(w => fmt(w.supplyCommit))} weeks={weeks} currentWk={currentWk} rowStyle="commit" />
+            {onSavePo ? (
+              <CommitEntryRow weeks={weeks} currentWk={currentWk}
+                totals={Object.fromEntries(current.weeks.map((w, i) => [weeks[i]?.label, w.supplyCommit]))}
+                manual={manualPo || {}} onSave={onSavePo} />
+            ) : (
+              <SDRow label="Supply (Commit)" values={current.weeks.map(w => fmt(w.supplyCommit))} weeks={weeks} currentWk={currentWk} rowStyle="commit" />
+            )}
             <SDRow label="Balance" values={current.weeks.map(w => fmt(w.balance))} weeks={weeks} currentWk={currentWk} rowStyle="balance" balanceValues={current.weeks.map(w => w.balance)} />
           </tbody>
         </table>
@@ -180,6 +189,57 @@ function SDRow({ label, values, weeks, currentWk, rowStyle, balanceValues }: {
         const isCurrent = w.label === currentWk
         const isNeg = rowStyle === 'balance' && balanceValues && balanceValues[i] < 0
         return (<td key={w.label} className={clsx('text-center px-1.5 py-1.5 border-b border-r border-[#EAECF0] text-xs tabular-nums', rowBg[rowStyle], cellColor[rowStyle], isCurrent && rowStyle !== 'balance' && 'bg-[#FEF3E2]', isCurrent && rowStyle === 'balance' && 'bg-[#0E5C56]', isNeg && '!text-[#C5453F]')}>{values[i]}</td>)
+      })}
+    </tr>
+  )
+}
+
+function PoEntryCell({ wk, value, onSave }: { wk: string; value: number; onSave: (wk: string, qty: number) => Promise<void> }) {
+  const [text, setText] = useState(value ? String(value) : '')
+  const [state, setState] = useState<'idle' | 'saving' | 'error'>('idle')
+  useEffect(() => { setText(value ? String(value) : '') }, [value])
+
+  async function commit() {
+    const n = text.trim() === '' ? 0 : Math.round(Number(text))
+    if (!Number.isFinite(n) || n < 0) { setState('error'); return }
+    if (n === (value || 0)) { setState('idle'); return }
+    setState('saving')
+    try { await onSave(wk, n); setState('idle') } catch { setState('error') }
+  }
+
+  return (
+    <input
+      inputMode="numeric"
+      value={text}
+      placeholder="–"
+      onChange={e => setText(e.target.value.replace(/[^0-9]/g, ''))}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+      disabled={state === 'saving'}
+      title={state === 'error' ? 'Save failed — retry' : 'Open PO qty arriving this week'}
+      className={clsx('w-full text-center text-xs tabular-nums bg-white rounded px-1 py-0.5 border focus:outline-none focus:ring-1 focus:ring-[#0E5C56]',
+        state === 'error' ? 'border-[#C5453F]' : 'border-[#D0D5DD]', state === 'saving' && 'opacity-50')}
+    />
+  )
+}
+
+/** Editable Supply (Commit) row. Cell = total commit for the week; edits adjust the manual OPEN-<sku>-<wk> line by the difference, so uploaded POs are untouched. */
+function CommitEntryRow({ weeks, currentWk, totals, manual, onSave }: {
+  weeks: WeekInfo[]; currentWk: string; totals: Record<string, number>; manual: Record<string, number>
+  onSave: (wk: string, qty: number) => Promise<void>
+}) {
+  return (
+    <tr>
+      <td className="px-3 py-1.5 font-medium text-xs border-b border-r border-[#EAECF0] sticky left-0 z-10 w-28 bg-[#EFF6FF] text-[#4B5563]">Supply (Commit)</td>
+      {weeks.map(w => {
+        const total = totals[w.label] || 0
+        const man = manual[w.label] || 0
+        const other = total - man
+        return (
+          <td key={w.label} className={clsx('px-1 py-1 border-b border-r border-[#EAECF0]', w.label === currentWk ? 'bg-[#FEF3E2]' : 'bg-[#EFF6FF]')}>
+            <PoEntryCell wk={w.label} value={total} onSave={(wk, n) => onSave(wk, Math.max(0, n - other))} />
+          </td>
+        )
       })}
     </tr>
   )
