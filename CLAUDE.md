@@ -52,3 +52,5 @@ Vercel (Node 24)
 
 ## Current work
 docs/SOW-v2.md. One phase at a time.
+**Read docs/HANDOVER.md first** — full context, accounts, architecture, data state, open items, decisions (18 Oct 2026 handover from the Claude app).
+After every production deploy, load the live page in Chrome and confirm the change (owner's standing request).
