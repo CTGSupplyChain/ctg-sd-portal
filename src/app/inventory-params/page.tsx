@@ -1,7 +1,8 @@
 'use client'
 // Inventory Parameters — min/max, reorder point, safety stock, EOQ per SKU.
 // Reads v_inventory_params (security_invoker → RLS scopes brand owners to their brand).
-// Policy knobs live in inventory_policy_config; only superadmin/admin can change them.
+// Policy knobs: inventory_policy_config (id=1) is the default; inventory_policy_brand holds per-brand overrides.
+// Only superadmin/admin can change them.
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
@@ -45,6 +46,8 @@ export default function InventoryParamsPage() {
   const [brands, setBrands] = useState<string[]>([])
   const [rows, setRows] = useState<Row[]>([])
   const [policy, setPolicy] = useState<Policy | null>(null)
+  const [defaults, setDefaults] = useState<Policy | null>(null)
+  const [overrides, setOverrides] = useState<Record<string, Partial<Policy>>>({})
   const [draft, setDraft] = useState<Policy | null>(null)
   const [fBrand, setFBrand] = useState('iLady')
   const [fStatus, setFStatus] = useState('')
@@ -68,22 +71,44 @@ export default function InventoryParamsPage() {
   }
 
   async function refresh() {
-    const [{ data: r }, { data: p }] = await Promise.all([
+    const [{ data: r }, { data: p }, { data: ov }] = await Promise.all([
       supabase.from('v_inventory_params').select('*'),
       supabase.from('inventory_policy_config').select('*').eq('id', 1).single(),
+      supabase.from('inventory_policy_brand').select('*'),
     ])
     const list = (r ?? []) as Row[]
     setRows(list)
-    setPolicy(p as Policy)
-    setDraft(p as Policy)
+    setDefaults(p as Policy)
+    const om: Record<string, Partial<Policy>> = {}
+    ;(ov ?? []).forEach((o: any) => { om[String(o.brand).toLowerCase()] = o })
+    setOverrides(om)
     const bs = Array.from(new Set(list.map(x => x.brand)))
     if (bs.length && !bs.includes(fBrand)) setFBrand(bs.includes('iLady') ? 'iLady' : bs[0])
   }
 
+  // Effective policy for the selected brand = default + that brand's overrides (All brands = the default itself).
+  useEffect(() => {
+    if (!defaults) return
+    const o = fBrand ? overrides[fBrand.toLowerCase()] : undefined
+    const eff = { ...defaults } as any
+    if (o) Object.entries(o).forEach(([k, v]) => { if (v !== null && v !== undefined && k in defaults) eff[k] = v })
+    setPolicy(eff as Policy); setDraft(eff as Policy)
+  }, [defaults, overrides, fBrand])
+
   async function savePolicy() {
-    if (!draft) return
+    if (!draft || !defaults) return
     setSaving(true); setMsg('')
-    const { error } = await supabase.from('inventory_policy_config').update({ ...draft, updated_at: new Date().toISOString() }).eq('id', 1)
+    const now = new Date().toISOString()
+    let error: any
+    if (!fBrand) {
+      ;({ error } = await supabase.from('inventory_policy_config').update({ ...draft, updated_at: now }).eq('id', 1))
+    } else {
+      // Store only the values that differ from the default as this brand's overrides.
+      const row: any = { brand: fBrand, updated_at: now }
+      const KEYS = ['z_a', 'z_b', 'z_c', 'abc_a_cut', 'abc_b_cut', 'cv_cap', 'default_cv', 'min_history_wk', 'run_rate_weeks', 'review_wk', 'lt_sigma_wk', 'order_cost_rm', 'holding_rate', 'planning_basis']
+      KEYS.forEach(k => { row[k] = (draft as any)[k] !== (defaults as any)[k] ? (draft as any)[k] : null })
+      ;({ error } = await supabase.from('inventory_policy_brand').upsert(row, { onConflict: 'brand' }))
+    }
     setSaving(false)
     if (error) { setMsg(`Not saved: ${error.message}`); return }
     setMsg('Saved — parameters recalculated.')
@@ -219,7 +244,8 @@ export default function InventoryParamsPage() {
 
               {editor && draft && (
                 <Card>
-                  <h2 style={{ fontSize: 13.5, fontFamily: 'Cambria, Georgia, serif', marginBottom: 8 }}>Policy settings</h2>
+                  <h2 style={{ fontSize: 13.5, fontFamily: 'Cambria, Georgia, serif', marginBottom: 4 }}>Policy settings · {fBrand || 'default for all brands'}</h2>
+                  <div style={{ fontSize: 11, color: '#667085', marginBottom: 8 }}>{fBrand ? `Applies to ${fBrand} only. Values left at the default follow the default for all brands.` : 'Default used by every brand without its own override. Pick a brand above to set brand-specific values.'}</div>
                   <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                     <div>
                       <label style={labelStyle}>Planning basis</label>

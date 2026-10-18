@@ -1,18 +1,19 @@
 'use client'
 // PO Release — reference list for the buyer. Suggested lines come from v_inventory_params;
 // buyer edits qty / dates, places the PO in the procurement/finance system, then pastes the PO number here.
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
 import Sidebar from '@/components/layout/Sidebar'
 import { canBuy, isStaff } from '@/lib/roles'
+import * as XLSX from 'xlsx'
 
 interface Line {
   id: string; sku: string; brand: string | null; suggested_qty: number; order_qty: number
   order_date: string; eta: string | null; reason: string | null; notes: string | null
   po_ref: string | null; status: 'open' | 'converted' | 'dismissed'; updated_at: string
 }
-interface Ctx { description: string | null; usable: number; incoming: number; woc_usable: number | null; moq: number; status: string }
+interface Ctx { description: string | null; usable: number; incoming: number; woc_usable: number | null; planning_wk: number; target_woc: number | null; moq: number; status: string }
 
 const inputStyle: React.CSSProperties = { border: '1px solid #D0D5DD', borderRadius: 6, padding: '3px 6px', fontSize: 12, background: '#fff' }
 const TONE: Record<string, string> = { 'Stocked out': '#2E2A24', 'Below safety stock': '#8C2A1E', 'Order now': '#7A5B14' }
@@ -30,6 +31,7 @@ export default function PoReleasePage() {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [loading, setLoading] = useState(true)
+  const autoRefreshed = useRef(false)
 
   useEffect(() => { load() }, [])
 
@@ -39,11 +41,16 @@ export default function PoReleasePage() {
     const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single()
     setProfile(prof)
     if (!isStaff(prof?.role)) { router.push('/dashboard'); return }
+    // Show the latest suggestions on open: refresh once per visit before loading the list.
+    if (canBuy(prof?.role) && !autoRefreshed.current) {
+      autoRefreshed.current = true
+      try { await call({ action: 'refresh' }) } catch { /* list still loads below */ }
+    }
     const { data: b } = await supabase.from('master_sku').select('brand').neq('brand', '')
     setBrands([...new Set((b || []).map((x: any) => x.brand))] as string[])
     const { data: l } = await supabase.from('po_release_lines').select('*').in('status', ['open', 'converted']).order('order_date', { ascending: false })
     setLines((l || []) as Line[])
-    const { data: p } = await supabase.from('v_inventory_params').select('sku, description, usable, incoming, woc_usable, moq, status')
+    const { data: p } = await supabase.from('v_inventory_params').select('sku, description, usable, incoming, woc_usable, planning_wk, target_woc, moq, status')
     const m: Record<string, Ctx> = {}
     ;(p || []).forEach((r: any) => { m[r.sku] = r })
     setCtx(m)
@@ -71,6 +78,33 @@ export default function PoReleasePage() {
   const shown = useMemo(() => lines.filter(l => l.status === tab && (!fBrand || (l.brand || '').toLowerCase() === fBrand.toLowerCase())), [lines, tab, fBrand])
   const openCount = lines.filter(l => l.status === 'open' && (!fBrand || (l.brand || '').toLowerCase() === fBrand.toLowerCase())).length
   const editable = canBuy(profile?.role)
+
+  async function importCsv(file: File) {
+    setBusy(true); setMsg('')
+    try {
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', raw: true })
+      const raw: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
+      const pick = (r: any, names: string[]) => {
+        const k = Object.keys(r).find(x => names.includes(x.trim().toLowerCase()))
+        return k ? r[k] : ''
+      }
+      const normDate = (v: any) => {
+        const t = String(v || '').trim(); if (!t) return ''
+        if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t
+        const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+        return m ? `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : ''
+      }
+      const rows = raw.map(r => ({
+        sku: pick(r, ['sku']), po_ref: pick(r, ['po number', 'po no', 'po no.', 'po', 'po_ref']),
+        qty: pick(r, ['quantity', 'qty']), eta: normDate(pick(r, ['eta'])),
+      })).filter(r => String(r.sku).trim())
+      if (!rows.length) { setMsg('No SKU column found in the file.'); setBusy(false); return }
+      const j = await call({ action: 'import', rows })
+      await load()
+      setMsg(`Import: ${j.converted} marked converted` + (j.skippedNoPo ? `, ${j.skippedNoPo} without PO number` : '') + (j.notFound?.length ? `, not matched: ${j.notFound.join(', ')}` : ''))
+    } catch (e: any) { setMsg(e.message || 'Import failed') }
+    setBusy(false)
+  }
 
   function exportCsv() {
     const head = ['Order date', 'SKU', 'Description', 'Quantity', 'ETA', 'Notes', 'PO number']
@@ -110,17 +144,23 @@ export default function PoReleasePage() {
                 <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
                   {editable && <button disabled={busy} onClick={() => act({ action: 'refresh' }, 'Refreshed: {added} new, {updated} updated')} style={{ ...inputStyle, cursor: 'pointer' }}>Refresh suggestions</button>}
                   <button onClick={exportCsv} style={{ ...inputStyle, cursor: 'pointer' }}>Export CSV</button>
+                  {editable && (
+                    <label style={{ ...inputStyle, cursor: 'pointer' }} title="Upload the exported CSV with the PO number column filled in">
+                      Import PO numbers
+                      <input type="file" accept=".csv,.xlsx" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) importCsv(f); e.target.value = '' }} />
+                    </label>
+                  )}
                 </span>
               </div>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead><tr>
                     <th style={th}>Order date</th><th style={th}>SKU</th><th style={th}>Description</th>
-                    <th style={th}>Quantity</th><th style={th}>ETA</th><th style={th}>Stock · incoming · WOC</th>
+                    <th style={th}>Quantity</th><th style={th}>ETA</th><th style={th} title="Usable stock · incoming PO/inbound">Stock · incoming</th><th style={th} title="Weeks of cover on usable stock today (excludes incoming)">WOC now</th><th style={th} title="(usable + incoming + this order) / weekly planning rate">WOC after PO</th><th style={th} title="Order-up-to level in weeks of demand: lead time + review + safety stock">Target WOC</th>
                     <th style={th}>Notes</th><th style={th}>PO number</th><th style={th}></th>
                   </tr></thead>
                   <tbody>
-                    {shown.length === 0 && <tr><td style={td} colSpan={9}>{tab === 'open' ? 'Nothing to action. Use "Refresh suggestions".' : 'No converted lines yet.'}</td></tr>}
+                    {shown.length === 0 && <tr><td style={td} colSpan={11}>{tab === 'open' ? 'Nothing to action. Use "Refresh suggestions".' : 'No converted lines yet.'}</td></tr>}
                     {shown.map(l => {
                       const c = ctx[l.sku]
                       const ro = !editable || l.status !== 'open'
@@ -134,7 +174,10 @@ export default function PoReleasePage() {
                             <div style={{ fontSize: 10.5, color: '#98A2B3' }}>suggested {l.suggested_qty.toLocaleString()}{c?.moq ? ` · MOQ ${c.moq.toLocaleString()}` : ''}</div>
                           </td>
                           <td style={td}><input type="date" defaultValue={l.eta ?? ''} disabled={ro} style={inputStyle} onBlur={e => e.target.value !== (l.eta ?? '') && act({ action: 'save', id: l.id, eta: e.target.value })} /></td>
-                          <td style={{ ...td, whiteSpace: 'nowrap', fontSize: 12 }}>{c ? `${Math.round(c.usable).toLocaleString()} · ${Math.round(c.incoming).toLocaleString()} · ${c.woc_usable == null ? '—' : Number(c.woc_usable).toFixed(1)}` : '—'}</td>
+                          <td style={{ ...td, whiteSpace: 'nowrap', fontSize: 12 }}>{c ? `${Math.round(c.usable).toLocaleString()} · ${Math.round(c.incoming).toLocaleString()}` : '—'}</td>
+                          <td style={{ ...td, fontSize: 12 }}>{c?.woc_usable == null ? '—' : Number(c.woc_usable).toFixed(1)}</td>
+                          <td style={{ ...td, fontSize: 12 }}>{c && Number(c.planning_wk) > 0 ? ((Number(c.usable) + Number(c.incoming) + Number(l.order_qty)) / Number(c.planning_wk)).toFixed(1) : '—'}</td>
+                          <td style={{ ...td, fontSize: 12 }}>{c?.target_woc == null ? '—' : Number(c.target_woc).toFixed(1)}</td>
                           <td style={td}><input defaultValue={l.notes ?? ''} disabled={ro} style={{ ...inputStyle, width: 140 }} onBlur={e => e.target.value !== (l.notes ?? '') && act({ action: 'save', id: l.id, notes: e.target.value })} /></td>
                           <td style={td}>
                             {l.status === 'converted' ? <b>{l.po_ref}</b> : (

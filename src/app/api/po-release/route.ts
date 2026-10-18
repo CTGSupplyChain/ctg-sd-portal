@@ -51,6 +51,30 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, added, updated })
     }
 
+    if (body.action === 'import') {
+      // Buyer re-uploads the exported CSV with PO numbers filled in: match the open line by SKU.
+      const rows: { sku?: string; po_ref?: string; qty?: any; eta?: string }[] = Array.isArray(body.rows) ? body.rows : []
+      const { data: open } = await s.from('po_release_lines').select('id, sku').eq('status', 'open')
+      const bySku = new Map((open || []).map((o: any) => [String(o.sku).toUpperCase(), o.id]))
+      let converted = 0, skippedNoPo = 0
+      const notFound: string[] = []
+      for (const r of rows) {
+        const sku = String(r.sku || '').trim().toUpperCase()
+        const ref = String(r.po_ref || '').trim()
+        if (!sku) continue
+        if (!ref) { skippedNoPo++; continue }
+        const id = bySku.get(sku)
+        if (!id) { notFound.push(sku); continue }
+        const patch: Record<string, any> = { po_ref: ref, status: 'converted', updated_at: now, updated_by: by }
+        const q = Math.round(Number(r.qty))
+        if (r.qty !== undefined && r.qty !== '' && Number.isFinite(q) && q >= 0) patch.order_qty = q
+        if (r.eta && /^\d{4}-\d{2}-\d{2}$/.test(r.eta)) patch.eta = r.eta
+        const { error: ie } = await s.from('po_release_lines').update(patch).eq('id', id)
+        if (ie) notFound.push(sku); else { converted++; bySku.delete(sku) }
+      }
+      return NextResponse.json({ success: true, converted, skippedNoPo, notFound })
+    }
+
     const { id } = body
     if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
     let patch: Record<string, any> = { updated_at: now, updated_by: by }
