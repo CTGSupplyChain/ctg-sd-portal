@@ -199,7 +199,7 @@ Older roadmaps still in the repo/memory (context, lower priority): `ROADMAP.md` 
 ## 10. Working agreement (workflow)
 
 1. Branch from `main` → commit → push → open the Vercel preview URL and check the page.
-2. **Auto-merge (owner approved 18 Oct 2026):** once typecheck + build pass and the branch preview is READY and checked, squash-merge the PR to `main`. Ask first only for irreversible/destructive data actions, role/security changes, or undecided product choices. (Before this date the owner approved every merge explicitly.)
+2. **Auto-merge (owner rule, 19 Oct 2026):** once typecheck + build pass and the branch preview is READY and checked (pages load, no console errors), squash-merge the PR to `main` yourself; do not wait for the owner. Ask first only for irreversible/destructive data actions, role/security changes, or undecided product choices.
 3. Every schema change = a file in `supabase/migrations`, committed with its code.
 4. **Back up before any migration that alters or deletes data.** Prefer reversible changes (cancel/archive) over hard deletes.
 5. Run Supabase security advisors after DDL; no new ERROR findings.
