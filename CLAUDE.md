@@ -16,12 +16,13 @@ Vercel (Node 24)
 
 ## Workflow
 1. Branch from main → commit → push → open the Vercel preview URL and check the page.
-2. Auto-merge (owner approved 18 Oct 2026): once typecheck + build pass and the branch preview is READY and checked, squash-merge the PR to main. Ask first only for irreversible/destructive data actions, role or security changes, or undecided product choices.
+2. Auto-merge (owner rule, 19 Oct 2026): once typecheck + build pass and the Vercel preview for the branch is READY and checked (pages load, no console errors), squash-merge the PR to main yourself so it deploys to production; do not wait for the owner. Stop and ask first only for anything irreversible or destructive to data, a change to roles or security, or a product decision the owner has not made.
 3. Every schema change = a file in supabase/migrations, committed with its code.
    (Migrations applied before 18 Oct 2026 live only in supabase_migrations.schema_migrations — backfill pending.)
 4. Back up before any migration that alters or deletes data.
 5. Run Supabase security advisors after DDL; no new ERROR-level findings.
-6. After production deploy, load the live page and confirm the change.
+6. After production deploy, wait until the deployment is READY, open the live page in a browser, confirm the change renders, check the console, and report what you saw. If no browser is available, say so.
+7. Prefer archive/cancel over hard delete. Never print or commit secrets, never type passwords (ask the owner to sign in), free tiers only.
 
 ## Roles (src/lib/roles.ts ↔ RLS ctg_global_role)
 | View | profiles.role | RLS token | Can |

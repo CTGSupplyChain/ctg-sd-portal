@@ -5,7 +5,7 @@ import clsx from 'clsx'
 import { isStaff, canEdit, roleLabel } from '@/lib/roles'
 import {
   LayoutDashboard, BarChart3, Bell, LogOut,
-  RefreshCw, TrendingUp, GitMerge, Send, SlidersHorizontal
+  RefreshCw, TrendingUp, GitMerge, Send, SlidersHorizontal, Target
 } from 'lucide-react'
 
 // Brands shown under "My Projects". Temporarily limited to iLady; add names back to re-enable.
@@ -61,6 +61,13 @@ export default function Sidebar({ userEmail, userName, userRole, brands = [], ac
           href="/inventory-params"
           active={pathname === '/inventory-params'}
           onClick={() => router.push('/inventory-params')}
+        />
+        <NavItem
+          icon={<Target size={15} />}
+          label="Forecast Accuracy"
+          href="/forecast-accuracy"
+          active={pathname === '/forecast-accuracy'}
+          onClick={() => router.push('/forecast-accuracy')}
         />
 
         {staff && (
