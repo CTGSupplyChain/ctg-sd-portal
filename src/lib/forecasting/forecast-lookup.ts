@@ -26,6 +26,7 @@ export async function loadDemandForecast(
     .from('demand_forecast')
     .select('sku, wk_label, forecast_qty')
     .in('sku', skus)
+    .neq('model_used', 'superseded') // superseded rows are zeroed leftovers; they must never shadow a live week
 
   if (error || !data) {
     console.error('demand_forecast load error:', error)
