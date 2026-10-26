@@ -69,7 +69,7 @@ export default function InventoryParamsPage() {
     if (!user) { router.push('/login'); return }
     const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single()
     setProfile(prof)
-    if (!isStaff(prof?.role) && !isBrandOwner(prof?.role)) { router.push('/forecast-submit'); return }
+    if (!isStaff(prof?.role) && !isBrandOwner(prof?.role)) { router.push('/forecast'); return }
     const { data: access } = await supabase.from('user_brand_access').select('brand').eq('user_id', user.id)
     setBrands((access ?? []).map((a: any) => a.brand))
     await refresh()
