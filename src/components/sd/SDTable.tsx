@@ -91,7 +91,7 @@ export function SDGrid({ current, weeks, currentWk, manualPo, onSavePo, compact 
         {[
           { color: '#1F2937', label: 'Balance' },
           { color: '#0E5C56', label: 'Supply commit' },
-          { color: '#C5453F', label: 'Negative balance' },
+          { color: '#C5453F', label: 'Zero or negative balance' },
           { color: '#E8A33D', label: 'Current week', opacity: '0.7' },
           ...(hasBackorder ? [{ color: '#F59E0B', label: 'Backorder' }] : []),
         ].map(l => (
@@ -190,7 +190,7 @@ function SDRow({ label, values, weeks, currentWk, rowStyle, balanceValues }: {
       <td className={clsx('px-3 py-1.5 font-medium text-xs border-b border-r border-[#EAECF0] sticky left-0 z-10 w-28', rowBg[rowStyle], labelColor[rowStyle])}>{label}</td>
       {weeks.map((w, i) => {
         const isCurrent = w.label === currentWk
-        const isNeg = rowStyle === 'balance' && balanceValues && balanceValues[i] < 0
+        const isNeg = rowStyle === 'balance' && balanceValues && balanceValues[i] <= 0
         return (<td key={w.label} className={clsx('text-center px-1.5 py-1.5 border-b border-r border-[#EAECF0] text-xs tabular-nums', rowBg[rowStyle], cellColor[rowStyle], isCurrent && rowStyle !== 'balance' && 'bg-[#FEF3E2]', isCurrent && rowStyle === 'balance' && 'bg-[#0E5C56]', isNeg && '!text-[#C5453F]')}>{values[i]}</td>)
       })}
     </tr>
@@ -254,7 +254,7 @@ export function SDLegend({ showBackorder = false }: { showBackorder?: boolean })
       {[
         { color: '#1F2937', label: 'Balance' },
         { color: '#0E5C56', label: 'Supply commit' },
-        { color: '#C5453F', label: 'Negative balance' },
+        { color: '#C5453F', label: 'Zero or negative balance' },
         { color: '#E8A33D', label: 'Current week', opacity: '0.7' },
         ...(showBackorder ? [{ color: '#F59E0B', label: 'Backorder' }] : []),
       ].map(l => (
