@@ -24,6 +24,9 @@ interface Policy {
   holding_rate: number; planning_basis: 'run_rate' | 'forecast' | 'max'
 }
 
+interface Change { sku: string; lt?: [number, number]; moq?: [number, number] }
+interface Upload { fileName: string; changes: Change[]; unchanged: number; unknown: string[]; invalid: string[] }
+
 const STATUS_ORDER = ['Stocked out', 'Below safety stock', 'Order now', 'OK', 'Excess', 'No demand', 'No signal']
 const STATUS_TONE: Record<string, { bg: string; bd: string; fg: string }> = {
   'Stocked out': { bg: '#2E2A24', bd: '#2E2A24', fg: '#fff' },
@@ -55,6 +58,9 @@ export default function InventoryParamsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
+  const [uMsg, setUMsg] = useState('')
+  const [upl, setUpl] = useState<Upload | null>(null)
+  const [applying, setApplying] = useState(false)
 
   useEffect(() => { load() }, [])
 
@@ -141,6 +147,93 @@ export default function InventoryParamsPage() {
   const salesThrough = rows[0]?.sales_through
   const stockDate = rows.find(r => r.snapshot_date)?.snapshot_date
 
+  const normHeader = (h: any) => String(h ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+
+  // Template: current LT / MOQ for the brand in view. Edit the two blue columns and upload the file back.
+  async function downloadTemplate() {
+    const XLSX = await import('xlsx')
+    const list = rows.filter(r => !fBrand || r.brand === fBrand).sort((a, b) => a.sku.localeCompare(b.sku))
+    const aoa: any[][] = [
+      [`Inventory Parameters update — ${fBrand || 'All brands'} — ${new Date().toISOString().slice(0, 10)}`],
+      ['Change LT wk (lead time, weeks) and MOQ only. Leave a cell blank to keep the current value. Do not change the SKU column. Data starts on row 4.'],
+      ['SKU', 'Description', 'LT wk', 'MOQ'],
+      ...list.map(r => [r.sku, r.description ?? '', r.lead_time_wk, r.moq]),
+    ]
+    const ws = XLSX.utils.aoa_to_sheet(aoa)
+    ws['!cols'] = [{ wch: 18 }, { wch: 60 }, { wch: 8 }, { wch: 10 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Update')
+    XLSX.writeFile(wb, `inventory_params_update_${(fBrand || 'all').toLowerCase()}.xlsx`)
+  }
+
+  async function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setUMsg('')
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+      const grid = XLSX.utils.sheet_to_json<any[]>(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: null, blankrows: false })
+      const hi = grid.findIndex(r => r.some(c => normHeader(c) === 'sku'))
+      if (hi < 0) { setUMsg('Upload failed: no SKU column found. Use the template.'); return }
+      const head = grid[hi].map(normHeader)
+      const iSku = head.indexOf('sku')
+      const iLt = head.findIndex(h => ['ltwk', 'leadtimewk', 'leadtime', 'lt'].includes(h))
+      const iMoq = head.indexOf('moq')
+      if (iLt < 0 && iMoq < 0) { setUMsg('Upload failed: need an "LT wk" and/or "MOQ" column.'); return }
+      const bySku = new Map(rows.map(r => [r.sku.toUpperCase(), r]))
+      const changes: Change[] = [], unknown: string[] = [], invalid: string[] = []
+      const seen = new Set<string>()
+      let unchanged = 0
+      for (const r of grid.slice(hi + 1)) {
+        const raw = r[iSku] == null ? '' : String(r[iSku]).trim()
+        if (!raw) continue
+        const cur = bySku.get(raw.toUpperCase())
+        if (!cur) { unknown.push(raw); continue }
+        if (seen.has(cur.sku)) { invalid.push(`${cur.sku}: listed twice`); continue }
+        seen.add(cur.sku)
+        const ch: Change = { sku: cur.sku }
+        let bad = ''
+        const read = (idx: number, label: string, min: number): number | null | undefined => {
+          if (idx < 0 || r[idx] == null || String(r[idx]).trim() === '') return undefined
+          const n = Number(r[idx])
+          if (!Number.isInteger(n) || n < min || n > 100000) { bad = `${cur.sku}: ${label} "${r[idx]}" must be a whole number${min ? ' of at least ' + min : ''}`; return null }
+          return n
+        }
+        const lt = read(iLt, 'LT wk', 1)
+        if (bad) { invalid.push(bad); continue }
+        const moq = read(iMoq, 'MOQ', 0)
+        if (bad) { invalid.push(bad); continue }
+        if (lt != null && lt !== cur.lead_time_wk) ch.lt = [cur.lead_time_wk, lt]
+        if (moq != null && moq !== cur.moq) ch.moq = [cur.moq, moq]
+        if (ch.lt || ch.moq) changes.push(ch); else unchanged++
+      }
+      setUpl({ fileName: file.name, changes, unchanged, unknown, invalid })
+    } catch (err: any) {
+      setUMsg(`Upload failed: ${err?.message ?? 'could not read the file'}`)
+    }
+  }
+
+  async function applyUpload() {
+    if (!upl || !upl.changes.length) return
+    setApplying(true); setUMsg('')
+    const failed: string[] = []
+    for (const c of upl.changes) {
+      const patch: any = {}
+      if (c.lt) patch.lead_time_wk = c.lt[1]
+      if (c.moq) patch.moq = c.moq[1]
+      const { error } = await supabase.from('master_sku').update(patch).eq('sku', c.sku)
+      if (error) failed.push(`${c.sku} (${error.message})`)
+    }
+    setApplying(false)
+    setUpl(null)
+    setUMsg(failed.length
+      ? `Updated ${upl.changes.length - failed.length} of ${upl.changes.length} SKUs. Not saved: ${failed.join('; ')}`
+      : `Updated ${upl.changes.length} SKU${upl.changes.length === 1 ? '' : 's'} — parameters recalculated.`)
+    await refresh()
+  }
+
   function exportCsv() {
     const cols: (keyof Row)[] = ['sku', 'description', 'segment', 'lead_time_wk', 'moq', 'run_rate_wk', 'forecast_wk', 'planning_wk', 'cv_lt', 'safety_stock', 'rop_min', 'max_level', 'eoq', 'target_woc', 'suggested_order_qty', 'status']
     const esc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`
@@ -190,9 +283,52 @@ export default function InventoryParamsPage() {
                       <Chip key={s} on={fStatus === s} onClick={() => setFStatus(fStatus === s ? '' : s)}>{s} · {counts[s]}</Chip>
                     ))}
                   </div>
-                  <button onClick={exportCsv} style={{ ...ghostBtn, marginLeft: 'auto' }}>Export CSV</button>
+                  <div style={{ display: 'flex', gap: 6, marginLeft: 'auto', flexWrap: 'wrap' }}>
+                    {editor && <button onClick={downloadTemplate} style={ghostBtn}>Download template</button>}
+                    {editor && (
+                      <>
+                        <input id="params-upload" type="file" accept=".xlsx,.xls,.csv" onChange={onPickFile} style={{ display: 'none' }} />
+                        <button onClick={() => document.getElementById('params-upload')?.click()} style={primaryBtn}>Upload LT / MOQ</button>
+                      </>
+                    )}
+                    <button onClick={exportCsv} style={ghostBtn}>Export CSV</button>
+                  </div>
                 </div>
               </Card>
+
+              {uMsg && (
+                <div style={{ fontSize: 12, marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: /fail|Not saved/.test(uMsg) ? '#FBEDEB' : '#EAF6F0', color: /fail|Not saved/.test(uMsg) ? '#8C2A1E' : '#0F6E56' }}>{uMsg}</div>
+              )}
+              {upl && (
+                <Card>
+                  <div style={{ fontWeight: 600, color: '#1F2937' }}>Review changes from {upl.fileName}</div>
+                  <div style={{ fontSize: 12, color: '#4B5563', margin: '4px 0 8px' }}>
+                    {upl.changes.length} to update · {upl.unchanged} unchanged{upl.unknown.length ? ` · ${upl.unknown.length} SKU not found` : ''}{upl.invalid.length ? ` · ${upl.invalid.length} rejected` : ''}
+                  </div>
+                  {upl.changes.length > 0 && (
+                    <div style={{ maxHeight: 240, overflowY: 'auto', overflowX: 'auto', marginBottom: 8 }}>
+                      <table style={{ borderCollapse: 'collapse', fontSize: 12 }}>
+                        <thead><tr style={{ color: '#4B5563', fontSize: 11 }}><th style={{ ...th, textAlign: 'left' }}>SKU</th><th style={th}>LT wk</th><th style={th}>MOQ</th></tr></thead>
+                        <tbody>
+                          {upl.changes.map(c => (
+                            <tr key={c.sku} style={{ borderTop: '1px solid #EFEAE2' }}>
+                              <td style={{ ...td, textAlign: 'left', fontWeight: 600 }}>{c.sku}</td>
+                              <td style={td}>{c.lt ? `${c.lt[0]} → ${c.lt[1]}` : '—'}</td>
+                              <td style={td}>{c.moq ? `${c.moq[0].toLocaleString()} → ${c.moq[1].toLocaleString()}` : '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {upl.unknown.length > 0 && <div style={{ fontSize: 12, color: '#7A5B14', marginBottom: 4 }}>Not found or hidden, skipped: {upl.unknown.join(', ')}</div>}
+                  {upl.invalid.length > 0 && <div style={{ fontSize: 12, color: '#8C2A1E', marginBottom: 4 }}>Rejected: {upl.invalid.join('; ')}</div>}
+                  <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                    <button onClick={applyUpload} disabled={applying || !upl.changes.length} style={{ ...primaryBtn, opacity: applying || !upl.changes.length ? 0.5 : 1 }}>{applying ? 'Saving…' : `Apply ${upl.changes.length} change${upl.changes.length === 1 ? '' : 's'}`}</button>
+                    <button onClick={() => setUpl(null)} disabled={applying} style={ghostBtn}>Cancel</button>
+                  </div>
+                </Card>
+              )}
 
               <Card>
                 <div style={{ overflowX: 'auto' }}>
