@@ -5,7 +5,7 @@ import clsx from 'clsx'
 import { isStaff, canEdit, roleLabel } from '@/lib/roles'
 import {
   LayoutDashboard, BarChart3, Bell, LogOut,
-  RefreshCw, TrendingUp, GitMerge, Send, SlidersHorizontal, Target
+  TrendingUp, GitMerge, Send, SlidersHorizontal, Target
 } from 'lucide-react'
 
 // Brands shown under "My Projects". Temporarily limited to iLady; add names back to re-enable.
@@ -64,10 +64,10 @@ export default function Sidebar({ userEmail, userName, userRole, brands = [], ac
         />
         <NavItem
           icon={<Target size={15} />}
-          label="Forecast Accuracy"
-          href="/forecast-accuracy"
-          active={pathname === '/forecast-accuracy'}
-          onClick={() => router.push('/forecast-accuracy')}
+          label="Forecast"
+          href="/forecast"
+          active={pathname === '/forecast'}
+          onClick={() => router.push('/forecast')}
         />
 
         {staff && (
@@ -88,22 +88,6 @@ export default function Sidebar({ userEmail, userName, userRole, brands = [], ac
             href="/sales-history-upload"
             active={pathname === '/sales-history-upload'}
             onClick={() => router.push('/sales-history-upload')}
-          />
-        )}
-        <NavItem
-          icon={<Send size={15} />}
-          label="Submit Forecast"
-          href="/forecast-submit"
-          active={pathname === '/forecast-submit'}
-          onClick={() => router.push('/forecast-submit')}
-        />
-        {staff && (
-          <NavItem
-            icon={<RefreshCw size={15} />}
-            label="Forecast Log"
-            href="/forecast-log"
-            active={pathname === '/forecast-log'}
-            onClick={() => router.push('/forecast-log')}
           />
         )}
         {editor && (

@@ -122,7 +122,7 @@ export default function DashboardPage() {
 
     // Staff see every brand; brand owners see their own brand (RLS scopes the rows).
     if (!isStaff(prof?.role) && !isBrandOwner(prof?.role)) {
-      router.push('/forecast-submit')
+      router.push('/forecast')
       return
     }
     if (isBrandOwner(prof?.role)) {
